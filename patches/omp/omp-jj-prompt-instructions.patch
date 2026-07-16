@@ -1,0 +1,56 @@
+diff --git a/packages/coding-agent/src/prompts/system/commit-message-system.md b/packages/coding-agent/src/prompts/system/commit-message-system.md
+index 119a625..820e8d5 100644
+--- a/packages/coding-agent/src/prompts/system/commit-message-system.md
++++ b/packages/coding-agent/src/prompts/system/commit-message-system.md
+@@ -1,4 +1,4 @@
+-Generate a concise git commit message from the provided diff.
++Generate a concise commit message from the provided diff.
+ 
+ Use conventional commit format: `type(scope): description`. Type is one of feat/fix/refactor/chore/test/docs. Scope is optional. The description MUST be lowercase, imperative mood, no trailing period. Keep the message under 72 characters.
+ 
+diff --git a/packages/coding-agent/src/prompts/system/orchestrate-notice.md b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
+index 4e61535..3471d88 100644
+--- a/packages/coding-agent/src/prompts/system/orchestrate-notice.md
++++ b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
+@@ -19,7 +19,7 @@ You decompose, dispatch, verify, and iterate. Substantial and parallelizable wor
+ </rules>
+ 
+ <workflow>
+-1. **Ingest.** Read every referenced file (audits, plans, prior agent output, current branch state). Run `git status` to see uncommitted changes.
++1. **Ingest.** Read every referenced file (audits, plans, prior agent output, current branch state). Run `jj st` (or `git status`) to see uncommitted changes.
+ 2. **Plan.** Materialize the full work surface in `todo` as ordered phases. Within each phase, list the parallelizable units.
+ 3. **Dispatch phase.** Launch all parallel `task` subagents in one message, then collect every result (async results / `hub` wait) before moving on.
+ 4. **Verify phase.** Run the gates. On failure, dispatch fix-up subagents and re-verify. Do not advance with a red gate.
+diff --git a/packages/coding-agent/src/prompts/system/plan-mode-active.md b/packages/coding-agent/src/prompts/system/plan-mode-active.md
+index e03e0da..dcd0073 100644
+--- a/packages/coding-agent/src/prompts/system/plan-mode-active.md
++++ b/packages/coding-agent/src/prompts/system/plan-mode-active.md
+@@ -1,7 +1,7 @@
+ <critical>
+ Plan mode is active. You MUST preserve read-only working-tree and system semantics:
+ - You NEVER create, edit, delete, or rename working-tree files.
+-- You NEVER run state-changing commands (`git commit`, `npm install`, migrations) or make any other system change.
++- You NEVER run state-changing commands (`git commit`, `jj describe`, `npm install`, migrations) or make any other system change.
+ - `local://` artifacts are session-local planning artifacts. You MAY create or update them when explicitly requested or needed for the plan.
+ - You NEVER delete or rename `local://` artifacts.
+ - You MUST write the canonical plan to `local://<slug>-plan.md`.
+diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
+index a2f286b..44e5d5f 100644
+--- a/packages/coding-agent/src/prompts/system/system-prompt.md
++++ b/packages/coding-agent/src/prompts/system/system-prompt.md
+@@ -202,7 +202,7 @@ EXECUTION WORKFLOW
+ - Prefer updating existing files over creating new ones.
+ - Review changes from the user's perspective.
+ {{#has tools "grep"}}- Grep instead of guessing.{{/has}}
+-{{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- Don't run destructive git commands or delete code you didn't write.{{/has}}
++{{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- Don't run destructive git/jj commands or delete code you didn't write.{{/has}}
+ 
+ # 5. Verify
+ - NEVER yield non-trivial work without proof that the deliverable works. The proof method depends on the ask:
+@@ -270,5 +270,5 @@ Before declaring blocked:
+ 
+ <critical>
+ - NEVER narrate or consider session limits, token or tool budgets, effort estimates, or how much you can finish. Not your concern—start as if unbounded; execute or delegate.
+-- NEVER re-audit an applied edit; NEVER run git subcommands as routine validation. Tool results are THE verification.
++- NEVER re-audit an applied edit; NEVER run git/jj subcommands as routine validation. Tool results are THE verification.
+ </critical>
