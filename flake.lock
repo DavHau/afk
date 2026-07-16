@@ -95,7 +95,27 @@
     "root": {
       "inputs": {
         "llm-agents": "llm-agents",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "superpowers": "superpowers",
+        "wrappers": "wrappers"
+      }
+    },
+    "superpowers": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783029415,
+        "narHash": "sha256-kHdQ9e44doBk2yYW88tMSCqVG8ycYcvJSZlrIziXhpA=",
+        "ref": "main",
+        "rev": "d884ae04edebef577e82ff7c4e143debd0bbec99",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/obra/superpowers.git"
+      },
+      "original": {
+        "ref": "main",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/obra/superpowers.git"
       }
     },
     "systems": {
@@ -132,6 +152,27 @@
         "owner": "numtide",
         "repo": "treefmt-nix",
         "type": "github"
+      }
+    },
+    "wrappers": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783783341,
+        "narHash": "sha256-zoxaqE02t2HdbDnDAAPbEJGFKDEaot52CepH5v39+f0=",
+        "ref": "refs/heads/main",
+        "rev": "b85926076618a9a57f450df8a660fba5880aeb21",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/lassulus/wrappers"
+      },
+      "original": {
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/lassulus/wrappers"
       }
     }
   },
