@@ -73,6 +73,8 @@ let
       ln -sf ${configFile} "$config_dir/config.yml"
       # The always-applied jj basics rule for the distribution.
       ln -sf ${../profile/rules/jj-basics.md} "$config_dir/rules/jj-basics.md"
+      # The always-applied merge protocol for isolated-subagent task refs.
+      ln -sf ${../profile/rules/isolated-task-merge.md} "$config_dir/rules/isolated-task-merge.md"
       # The superpowers bootstrap injector — skills never fire without it.
       ln -sf ${../extensions/superpowers.ts} "$config_dir/extensions/superpowers.ts"
       # direnv auto-load: applies `direnv export json` to the agent process.

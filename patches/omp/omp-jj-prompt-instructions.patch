@@ -1,3 +1,18 @@
+afk: prompt wording only — mention jj alongside git in the hardcoded
+prompts (system-prompt, orchestrate-notice, plan-mode-active,
+commit-message-system).
+
+Motivation: this distribution mandates jj (profile/rules/jj-basics.md),
+but omp's built-in prompts speak raw git (`git status`, branch talk,
+commit instructions). Agents follow the nearest instruction, so the
+built-ins must at least name the jj equivalents (`jj st`,
+`jj describe`) instead of contradicting the rule files.
+
+What must survive a rebase:
+- No behavior change, prose only. If upstream rewrote these prompt
+  files, re-apply the intent (jj named wherever git subcommands are
+  prescribed) rather than the exact wording.
+
 diff --git a/packages/coding-agent/src/prompts/system/commit-message-system.md b/packages/coding-agent/src/prompts/system/commit-message-system.md
 index 119a625..820e8d5 100644
 --- a/packages/coding-agent/src/prompts/system/commit-message-system.md

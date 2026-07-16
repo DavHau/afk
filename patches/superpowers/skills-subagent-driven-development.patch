@@ -1,0 +1,440 @@
+afk: rewrite subagent-driven-development for native isolated-subagent
+parallelism. (Also touches implementer-prompt.md and
+task-reviewer-prompt.md.)
+
+Motivation: upstream assumes subagents share the working tree, so it
+serializes tasks ("Never: Dispatch multiple implementation subagents in
+parallel (conflicts)") and has implementers commit directly. On this
+harness, file-editing subagents run isolated (copy-on-write snapshot;
+changes parked on refs/omp/task/<id>; the orchestrator cherry-picks —
+see profile/rules/isolated-task-merge.md), and the task tool has no
+model parameter (agent types instead: sonic/task/reviewer/scout/...).
+
+What must survive a rebase:
+- Process = waves from the plan's Dependency Map: dispatch ALL ready
+  tasks in parallel (isolated: true); review each task PRE-merge from
+  its parked ref (review-package "$(git merge-base HEAD <ref>)" <ref>);
+  merge only approved refs; wave review after a wave is fully merged;
+  final whole-branch review unchanged.
+- Verdict policy: approved -> merge; fixable findings -> merge, then fix
+  subagent on the merged state; fundamentally wrong -> delete the ref
+  unmerged, re-dispatch the implementer with the findings.
+- "Model Selection" stays translated to Agent Selection (sonic = cheap
+  mechanical/transcription, task = default, reviewer = all reviews).
+- Implementers never run git/jj; reports list files changed, not
+  commits; ledger lines say "merged", not "commits".
+- Dropped on purpose: "Never start on main/master" (jj describe-then-new
+  flow has no branch checkouts) and the using-git-worktrees integration
+  bullet (isolation is native).
+
+diff --git a/skills/subagent-driven-development/SKILL.md b/skills/subagent-driven-development/SKILL.md
+index d8ca081..73f2c0c 100644
+--- a/skills/subagent-driven-development/SKILL.md
++++ b/skills/subagent-driven-development/SKILL.md
+@@ -5,11 +5,11 @@ description: Use when executing implementation plans with independent tasks in t
+ 
+ # Subagent-Driven Development
+ 
+-Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end.
++Execute plan wave by wave: a fresh isolated implementer subagent per task with independent tasks dispatched in parallel, a task review (spec compliance + code quality) gating each merge, and a broad whole-branch review at the end.
+ 
+ **Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
+ 
+-**Core principle:** Fresh subagent per task + task review (spec + quality) + broad final review = high quality, fast iteration
++**Core principle:** Parallel isolated implementers per wave + pre-merge task review (spec + quality) + broad final review = high quality, fast iteration
+ 
+ **Narration:** between tool calls, narrate at most one short line — the
+ ledger and the tool results carry the record.
+@@ -48,43 +48,63 @@ digraph when_to_use {
+ digraph process {
+     rankdir=TB;
+ 
+-    subgraph cluster_per_task {
+-        label="Per Task";
+-        "Dispatch implementer subagent (./implementer-prompt.md)" [shape=box];
+-        "Implementer subagent asks questions?" [shape=diamond];
+-        "Answer questions, provide context" [shape=box];
+-        "Implementer subagent implements, tests, commits, self-reviews" [shape=box];
+-        "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [shape=box];
+-        "Task reviewer reports spec ✅ and quality approved?" [shape=diamond];
+-        "Dispatch fix subagent for Critical/Important findings" [shape=box];
+-        "Mark task complete in todo list and progress ledger" [shape=box];
+-    }
+-
+-    "Read plan, note context and global constraints, create todos" [shape=box];
+-    "More tasks remain?" [shape=diamond];
++    "Read plan + Dependency Map, note global constraints, create todos" [shape=box];
++    "Dispatch every ready task: parallel isolated implementer subagents (./implementer-prompt.md)" [shape=box];
++    "An implementer finishes; changes parked on its task ref" [shape=box];
++    "Write diff file from the parked ref, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [shape=box];
++    "Task reviewer reports spec ✅ and quality approved?" [shape=diamond];
++    "Findings fixable?" [shape=diamond];
++    "Merge ref; dispatch fix subagent for Critical/Important findings, re-review its ref" [shape=box];
++    "Delete ref unmerged, re-dispatch implementer with findings" [shape=box];
++    "Merge ref, mark task complete in todo list and progress ledger" [shape=box];
++    "Wave fully merged?" [shape=diamond];
++    "Dispatch wave review over the merged wave diff" [shape=box];
++    "More waves remain?" [shape=diamond];
+     "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [shape=box];
+     "Use superpowers:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
+ 
+-    "Read plan, note context and global constraints, create todos" -> "Dispatch implementer subagent (./implementer-prompt.md)";
+-    "Dispatch implementer subagent (./implementer-prompt.md)" -> "Implementer subagent asks questions?";
+-    "Implementer subagent asks questions?" -> "Answer questions, provide context" [label="yes"];
+-    "Answer questions, provide context" -> "Dispatch implementer subagent (./implementer-prompt.md)";
+-    "Implementer subagent asks questions?" -> "Implementer subagent implements, tests, commits, self-reviews" [label="no"];
+-    "Implementer subagent implements, tests, commits, self-reviews" -> "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)";
+-    "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" -> "Task reviewer reports spec ✅ and quality approved?";
+-    "Task reviewer reports spec ✅ and quality approved?" -> "Dispatch fix subagent for Critical/Important findings" [label="no"];
+-    "Dispatch fix subagent for Critical/Important findings" -> "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [label="re-review"];
+-    "Task reviewer reports spec ✅ and quality approved?" -> "Mark task complete in todo list and progress ledger" [label="yes"];
+-    "Mark task complete in todo list and progress ledger" -> "More tasks remain?";
+-    "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
+-    "More tasks remain?" -> "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [label="no"];
++    "Read plan + Dependency Map, note global constraints, create todos" -> "Dispatch every ready task: parallel isolated implementer subagents (./implementer-prompt.md)";
++    "Dispatch every ready task: parallel isolated implementer subagents (./implementer-prompt.md)" -> "An implementer finishes; changes parked on its task ref";
++    "An implementer finishes; changes parked on its task ref" -> "Write diff file from the parked ref, dispatch task reviewer subagent (./task-reviewer-prompt.md)";
++    "Write diff file from the parked ref, dispatch task reviewer subagent (./task-reviewer-prompt.md)" -> "Task reviewer reports spec ✅ and quality approved?";
++    "Task reviewer reports spec ✅ and quality approved?" -> "Merge ref, mark task complete in todo list and progress ledger" [label="yes"];
++    "Task reviewer reports spec ✅ and quality approved?" -> "Findings fixable?" [label="no"];
++    "Findings fixable?" -> "Merge ref; dispatch fix subagent for Critical/Important findings, re-review its ref" [label="yes"];
++    "Findings fixable?" -> "Delete ref unmerged, re-dispatch implementer with findings" [label="no - fundamentally wrong"];
++    "Merge ref; dispatch fix subagent for Critical/Important findings, re-review its ref" -> "Merge ref, mark task complete in todo list and progress ledger" [label="fix approved"];
++    "Delete ref unmerged, re-dispatch implementer with findings" -> "An implementer finishes; changes parked on its task ref";
++    "Merge ref, mark task complete in todo list and progress ledger" -> "Wave fully merged?";
++    "Wave fully merged?" -> "Dispatch every ready task: parallel isolated implementer subagents (./implementer-prompt.md)" [label="no - other tasks still running"];
++    "Wave fully merged?" -> "Dispatch wave review over the merged wave diff" [label="yes"];
++    "Dispatch wave review over the merged wave diff" -> "More waves remain?";
++    "More waves remain?" -> "Dispatch every ready task: parallel isolated implementer subagents (./implementer-prompt.md)" [label="yes"];
++    "More waves remain?" -> "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [label="no"];
+     "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" -> "Use superpowers:finishing-a-development-branch";
+ }
+ ```
+ 
++### Wave Scheduling
++
++- The plan's Dependency Map defines the waves: a task is ready when every
++  task it depends on is merged. Dispatch ALL ready tasks in one batch of
++  isolated implementer subagents — never serialize independent tasks.
++  Isolated subagents cannot conflict while running.
++- Each implementer's changes come back parked on a task ref; your worktree
++  stays clean while implementers run. Merging refs is governed by the
++  always-applied `isolated-task-merge` rule.
++- Review pre-merge: generate the review package from the parked ref (see
++  Handling Implementer Status) and only cherry-pick an approved ref.
++- Verdicts: approved → merge, mark complete, dispatch newly-ready tasks.
++  Fixable Critical/Important findings → merge, dispatch a fix subagent on
++  the merged state, review the fix's own ref. Fundamentally wrong → delete
++  the ref unmerged, re-dispatch the implementer with the findings.
++- When a wave is fully merged, dispatch a wave review over the whole wave
++  diff (`scripts/review-package <wave-base> HEAD`; wave-base = HEAD before
++  the wave's first merge) before starting the next wave.
++
+ ## Pre-Flight Plan Review
+ 
+-Before dispatching Task 1, scan the plan once for conflicts:
++Before dispatching the first wave, scan the plan once for conflicts:
+ 
+ - tasks that contradict each other or the plan's Global Constraints
+ - anything the plan explicitly mandates that the review rubric treats as a
+@@ -96,56 +116,43 @@ before execution begins, not one interrupt per discovery mid-plan. If the
+ scan is clean, proceed without comment. The review loop remains the net for
+ conflicts that only emerge from implementation.
+ 
+-## Model Selection
+-
+-Use the least powerful model that can handle each role to conserve cost and increase speed.
++## Agent Selection
+ 
+-**Mechanical implementation tasks** (isolated functions, clear specs, 1-2 files): use a fast, cheap model. Most implementation tasks are mechanical when the plan is well-specified.
++Use the least capable agent type that can handle each role to conserve cost and increase speed. There is no per-dispatch model parameter — the agent type picks the model.
+ 
+-**Integration and judgment tasks** (multi-file coordination, pattern matching, debugging): use a standard model.
++**Mechanical implementation tasks** (isolated functions, complete spec, 1-2 files): `sonic`. When the task's plan text contains the complete code to write, the implementation is transcription plus testing — also `sonic`.
+ 
+-**Architecture and design tasks**: use the most capable available model.
+-The final whole-branch review is one of these — dispatch it on the most
+-capable available model, not the session default.
++**Everything else — integration, judgment, multi-file coordination, debugging**: `task`, the default worker.
+ 
+-**Review tasks**: choose the model with the same judgment, scaled to the
+-diff's size, complexity, and risk. A small mechanical diff does not need the
+-most capable model; a subtle concurrency change does.
+-
+-**Always specify the model explicitly when dispatching a subagent.** An
+-omitted model inherits your session's model — often the most capable and
+-most expensive — which silently defeats this section.
++**Reviews** (task reviews, wave reviews, the final whole-branch review): `reviewer` — pinned to a top-tier model and structured for findings.
+ 
+ **Turn count beats token price.** Wall-clock and context cost scale with how
+-many turns a subagent takes, and the cheapest models routinely take 2-3× the
+-turns on multi-step work — costing more overall. Use a mid-tier model as the
+-floor for reviewers and for implementers working from prose descriptions.
+-When the task's plan text contains the complete code to write, the
+-implementation is transcription plus testing: use the cheapest tier for
+-that implementer. Single-file mechanical fixes also take the cheapest tier.
++many turns a subagent takes, and the cheapest agents routinely take 2-3× the
++turns on multi-step work — costing more overall. Use `task` as the floor for
++implementers working from prose descriptions; reserve `sonic` for
++transcription and single-file mechanical fixes.
+ 
+ **Task complexity signals (implementation tasks):**
+-- Touches 1-2 files with a complete spec → cheap model
+-- Touches multiple files with integration concerns → standard model
+-- Requires design judgment or broad codebase understanding → most capable model
++- Touches 1-2 files with a complete spec → `sonic`
++- Anything else → `task`
+ 
+ ## Handling Implementer Status
+ 
+ Implementer subagents report one of four statuses. Handle each appropriately:
+ 
+-**DONE:** Generate the review package (`scripts/review-package BASE HEAD`, from this skill's directory — it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer — never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
++**DONE:** The task's changes are parked on its task ref — the task result names it; nothing has touched your worktree. Generate the review package from the ref (`scripts/review-package "$(git merge-base HEAD <ref>)" <ref>`, from this skill's directory — it prints the unique file path it wrote), then dispatch the task reviewer with the printed path. Merge the ref only after the review comes back clean (per the `isolated-task-merge` rule).
+ 
+ **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
+ 
+ **NEEDS_CONTEXT:** The implementer needs information that wasn't provided. Provide the missing context and re-dispatch.
+ 
+ **BLOCKED:** The implementer cannot complete the task. Assess the blocker:
+-1. If it's a context problem, provide more context and re-dispatch with the same model
+-2. If the task requires more reasoning, re-dispatch with a more capable model
++1. If it's a context problem, provide more context and re-dispatch the same agent type
++2. If the task requires more reasoning, re-dispatch with a more capable agent type (`sonic` → `task`)
+ 3. If the task is too large, break it into smaller pieces
+ 4. If the plan itself is wrong, escalate to the human
+ 
+-**Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
++**Never** ignore an escalation or force the same agent to retry without changes. If the implementer said it's stuck, something needs to change.
+ 
+ ## Handling Reviewer ⚠️ Items
+ 
+@@ -184,8 +191,9 @@ final whole-branch review. When you fill a reviewer template:
+   and `git diff -U10` for the range, redirected to one uniquely named
+   file). The output never enters your own context, and the reviewer sees
+   the commit list, stat summary, and full diff with context in one Read
+-  call. Use the BASE you recorded before dispatching the implementer —
+-  never `HEAD~1`, which silently truncates multi-commit tasks.
++  call. For a pre-merge task review, BASE is `git merge-base HEAD <ref>`
++  and HEAD is the parked task ref itself — never `HEAD~1`, which silently
++  truncates multi-commit tasks.
+ - A dispatch prompt describes one task, not the session's history. Do not
+   paste accumulated prior-task summaries ("state after Tasks 1-3") into
+   later dispatches — a real session's dispatch hit 42k chars of which 99%
+@@ -236,7 +244,7 @@ and is re-read on every later turn. Hand artifacts over as files:
+ - **Report file:** name the implementer's report file after the brief
+   (brief `…/task-N-brief.md` → report `…/task-N-report.md`) and put it in
+   the dispatch prompt. The implementer writes the full report there and
+-  returns only status, commits, a one-line test summary, and concerns.
++  returns only status, files changed, a one-line test summary, and concerns.
+ - **Reviewer inputs:** the task reviewer gets three paths — the same brief
+   file, the report file, and the review package — plus the global
+   constraints that bind the task.
+@@ -256,7 +264,7 @@ a ledger file, not only in todos.
+   not marked complete.
+ - When a task's review comes back clean, append one line to the ledger in
+   the same message as your other bookkeeping:
+-  `Task N: complete (commits <base7>..<head7>, review clean)`.
++  `Task N: complete (merged <base7>..<head7>, review clean)`.
+ - The ledger is your recovery map: the commits it names exist in git even
+   when your context no longer remembers creating them. After compaction,
+   trust the ledger and `git log` over your own recollection.
+@@ -275,53 +283,55 @@ a ledger file, not only in todos.
+ You: I'm using Subagent-Driven Development to execute this plan.
+ 
+ [Read plan file once: docs/superpowers/plans/feature-plan.md]
+-[Create todos for all tasks]
++[Create todos for all tasks; Dependency Map: Wave 1 = Task 1 + Task 2 (independent), Wave 2 = Task 3]
+ 
+-Task 1: Hook installation script
++Wave 1: Tasks 1 and 2 dispatched together as isolated implementers
+ 
+-[Run task-brief for Task 1; dispatch implementer with brief + report paths + context]
++[Run task-brief for each; dispatch both implementers in one batch, isolated: true]
+ 
+-Implementer: "Before I begin - should the hook be installed at user or system level?"
++Implementer 1: "Before I begin - should the hook be installed at user or system level?"
+ 
+ You: "User level (~/.config/superpowers/hooks/)"
+ 
+-Implementer: "Got it. Implementing now..."
+-[Later] Implementer:
++Implementer 1: "Got it. Implementing now..."
++[Later] Implementer 1:
+   - Implemented install-hook command
+   - Added tests, 5/5 passing
+   - Self-review: Found I missed --force flag, added it
+-  - Committed
++  - Changes parked on task ref
+ 
+-[Run review-package, dispatch task reviewer with the printed path]
++[Run review-package on the parked ref, dispatch task reviewer with the printed path]
+ Task reviewer: Spec ✅ - all requirements met, nothing extra.
+   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
+ 
+-[Mark Task 1 complete]
++[Merge Task 1 ref, mark Task 1 complete]
+ 
+-Task 2: Recovery modes
++Task 2: Recovery modes (ran concurrently)
+ 
+-[Run task-brief for Task 2; dispatch implementer with brief + report paths + context]
++[Dispatched in the same Wave 1 batch; its review ran after its own finish]
+ 
+-Implementer: [No questions, proceeds]
+-Implementer:
++Implementer 2: [No questions, proceeds]
++Implementer 2:
+   - Added verify/repair modes
+   - 8/8 tests passing
+   - Self-review: All good
+-  - Committed
++  - Changes parked on task ref
+ 
+-[Run review-package, dispatch task reviewer with the printed path]
++[Run review-package on the parked ref, dispatch task reviewer with the printed path]
+ Task reviewer: Spec ❌:
+   - Missing: Progress reporting (spec says "report every 100 items")
+   - Extra: Added --json flag (not requested)
+   Issues (Important): Magic number (100)
+ 
+-[Dispatch fix subagent with all findings]
++[Merge Task 2 ref; dispatch fix subagent with all findings]
+ Fixer: Removed --json flag, added progress reporting, extracted PROGRESS_INTERVAL constant
+ 
+-[Task reviewer reviews again]
++[Task reviewer reviews the fix's ref again]
+ Task reviewer: Spec ✅. Task quality: Approved.
+ 
+-[Mark Task 2 complete]
++[Merge fix ref, mark Task 2 complete]
++
++[Wave 1 fully merged — dispatch wave review; clean → dispatch Wave 2]
+ 
+ ...
+ 
+@@ -337,7 +347,7 @@ Done!
+ **vs. Manual execution:**
+ - Subagents follow TDD naturally
+ - Fresh context per task (no confusion)
+-- Parallel-safe (subagents don't interfere)
++- Parallel-safe (isolated subagents never conflict while running)
+ - Subagent can ask questions (before AND during work)
+ 
+ **vs. Executing Plans:**
+@@ -367,10 +377,9 @@ Done!
+ ## Red Flags
+ 
+ **Never:**
+-- Start implementation on main/master branch without explicit user consent
+ - Skip task review, or accept a report missing either verdict (spec compliance AND task quality are both required)
+ - Proceed with unfixed issues
+-- Dispatch multiple implementation subagents in parallel (conflicts)
++- Serialize independent tasks (isolated implementers run in parallel; only true dependencies order work)
+ - Make a subagent read the whole plan file (hand it its task brief —
+   `scripts/task-brief` — instead)
+ - Skip scene-setting context (subagent needs to understand where task fits)
+@@ -382,8 +391,8 @@ Done!
+   dispatch prompt ("treat it as Minor at most") — the plan's example code is
+   a starting point, not evidence that its weaknesses were chosen
+ - Dispatch a task reviewer without a diff file — generate it first
+-  (`scripts/review-package BASE HEAD`) and name the printed path in the
+-  prompt
++  (`scripts/review-package` on the parked ref) and name the printed path
++  in the prompt
+ - Move to next task while the review has open Critical/Important issues
+ - Re-dispatch a task the progress ledger already marks complete — check
+   the ledger (and `git log`) after any compaction or resume
+@@ -406,7 +415,6 @@ Done!
+ ## Integration
+ 
+ **Required workflow skills:**
+-- **superpowers:using-git-worktrees** - Ensures isolated workspace (creates one or verifies existing)
+ - **superpowers:writing-plans** - Creates the plan this skill executes
+ - **superpowers:requesting-code-review** - Code review template for the final whole-branch review
+ - **superpowers:finishing-a-development-branch** - Complete development after all tasks
+diff --git a/skills/subagent-driven-development/implementer-prompt.md b/skills/subagent-driven-development/implementer-prompt.md
+index 218fcfe..341879b 100644
+--- a/skills/subagent-driven-development/implementer-prompt.md
++++ b/skills/subagent-driven-development/implementer-prompt.md
+@@ -3,10 +3,10 @@
+ Use this template when dispatching an implementer subagent.
+ 
+ ```
+-Subagent (general-purpose):
++Subagent (task tool, isolated: true):
+   description: "Implement Task N: [task name]"
+-  model: [MODEL — REQUIRED: choose per SKILL.md Model Selection; an omitted
+-         model silently inherits the session's most expensive one]
++  agent: [AGENT — choose per SKILL.md Agent Selection: sonic for
++         transcription-grade tasks, task otherwise]
+   prompt: |
+     You are implementing Task N: [task name]
+ 
+@@ -35,9 +35,11 @@ Subagent (general-purpose):
+     1. Implement exactly what the task specifies
+     2. Write tests (following TDD if task says to)
+     3. Verify implementation works
+-    4. Commit your work
+-    5. Self-review (see below)
+-    6. Report back
++    4. Self-review (see below)
++    5. Report back
++
++    Do NOT run git or jj — you work in an isolated snapshot and the harness
++    captures your changes automatically when you finish.
+ 
+     Work from: [directory]
+ 
+@@ -45,7 +47,7 @@ Subagent (general-purpose):
+     It's always OK to pause and clarify. Don't guess or make assumptions.
+ 
+     While iterating, run the focused test for what you're changing; run the
+-    full suite once before committing, not after every edit.
++    full suite once before reporting back, not after every edit.
+ 
+     ## Code Organization
+ 
+@@ -74,7 +76,7 @@ Subagent (general-purpose):
+ 
+     **How to escalate:** Report back with status BLOCKED or NEEDS_CONTEXT. Describe
+     specifically what you're stuck on, what you've tried, and what kind of help you need.
+-    The controller can provide more context, re-dispatch with a more capable model,
++    The controller can provide more context, re-dispatch with a more capable agent,
+     or break the task into smaller pieces.
+ 
+     ## Before Reporting Back: Self-Review
+@@ -125,7 +127,7 @@ Subagent (general-purpose):
+     Then report back with ONLY (under 15 lines — the detail lives in the
+     report file):
+     - **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+-    - Commits created (short SHA + subject)
++    - Files changed (paths only)
+     - One-line test summary (e.g. "14/14 passing, output pristine")
+     - Your concerns, if any
+     - The report file path
+diff --git a/skills/subagent-driven-development/task-reviewer-prompt.md b/skills/subagent-driven-development/task-reviewer-prompt.md
+index 588a402..1d1c3fb 100644
+--- a/skills/subagent-driven-development/task-reviewer-prompt.md
++++ b/skills/subagent-driven-development/task-reviewer-prompt.md
+@@ -8,10 +8,8 @@ code quality.
+ more, nothing less) and is well-built (clean, tested, maintainable)
+ 
+ ```
+-Subagent (general-purpose):
++Subagent (task tool, agent: reviewer):
+   description: "Review Task N (spec + quality)"
+-  model: [MODEL — REQUIRED: choose per SKILL.md Model Selection; an omitted
+-         model silently inherits the session's most expensive one]
+   prompt: |
+     You are reviewing one task's implementation: first whether it matches its
+     requirements, then whether it is well-built. This is a task-scoped gate,
+@@ -166,7 +164,7 @@ Subagent (general-purpose):
+ ```
+ 
+ **Placeholders:**
+-- `[MODEL]` — REQUIRED: reviewer model per SKILL.md Model Selection
++- (reviews always dispatch the `reviewer` agent — see SKILL.md Agent Selection)
+ - `[BRIEF_FILE]` — REQUIRED: the task brief file (`scripts/task-brief PLAN N`
+   prints the path; same file the implementer worked from)
+ - `[GLOBAL_CONSTRAINTS]` — the binding requirements copied verbatim from

@@ -1,3 +1,23 @@
+afk: park isolated-task commits on refs/omp/task/* instead of
+refs/heads/omp/task/*.
+
+Motivation: in a jj-colocated checkout, jj imports and manages
+refs/heads/*. Upstream's transient task branches get imported by jj;
+their post-merge deletion once made jj rebase the parent's commit stack
+onto a stale bookmark and orphan every commit in between (the
+abandoned-commits incident). Refs outside refs/heads/ are invisible to
+jj import while every git command still resolves the short name
+omp/task/<id> via git's refs/<name> lookup fallback.
+
+What must survive a rebase:
+- Every creation, lookup, deletion, and doc mention of the task branch
+  uses the fully qualified refs/omp/task/<id> (git update-ref, not
+  git branch) — grep upstream for "omp/task/" after rebasing; any new
+  code path that mints refs/heads/omp/task/* reintroduces the bug.
+- The ref must stay cherry-pickable and listable via
+  `git for-each-ref refs/omp/task` (profile/rules/isolated-task-merge.md
+  and the superpowers skill patches depend on that contract).
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
 index 1a5a98b..1956bf9 100644
 --- a/docs/tools/task.md

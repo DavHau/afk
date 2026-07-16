@@ -1,3 +1,22 @@
+afk: add task.isolation.autoApply (default true).
+
+Motivation: upstream always merges an isolated task's captured changes
+back into the parent worktree the moment the subagent finishes. With
+many parallel isolated subagents that races concurrent edits and dirties
+the orchestrator's worktree mid-flight. autoApply=false (set in
+nix/afk.nix config.yml) keeps each task's changes parked on its
+refs/omp/task/<id> ref and only announces where they live, so the
+orchestrator cherry-picks against a clean tree (mirrors eval
+agent(apply=false)).
+
+What must survive a rebase:
+- The setting (settings-schema) and the executor short-circuit: when
+  isolated && !autoApply, skip mergeIsolatedChanges, keep the ref/patch,
+  and append the "changes captured on branch `omp/task/<id>` ... Not
+  merged." notice to the task result text — the distribution's merge
+  rule tells agents to read the ref name from that notice.
+- eval agent()'s explicit apply= argument still overrides per call.
+
 diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
 index fd8e601..e1ba27a 100644
 --- a/packages/coding-agent/src/config/settings-schema.ts

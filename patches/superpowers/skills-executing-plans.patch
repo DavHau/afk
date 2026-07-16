@@ -1,0 +1,38 @@
+afk: subagents always exist here; no manual worktrees.
+
+Motivation: upstream treats subagent support as optional and
+platform-dependent. omp always provides the task tool, so inline
+execution is opt-in only; workspace isolation is native (isolated
+subagents), never a worktree skill.
+
+What must survive a rebase:
+- Overview note redirects to subagent-driven-development
+  unconditionally; this skill runs only on explicit user request.
+- Dropped on purpose: the using-git-worktrees integration bullet and
+  the "never start on main/master" line (jj flow, no branch checkouts).
+
+diff --git a/skills/executing-plans/SKILL.md b/skills/executing-plans/SKILL.md
+index 075a103..80e43a4 100644
+--- a/skills/executing-plans/SKILL.md
++++ b/skills/executing-plans/SKILL.md
+@@ -11,7 +11,7 @@ Load plan, review critically, execute all tasks, report when complete.
+ 
+ **Announce at start:** "I'm using the executing-plans skill to implement this plan."
+ 
+-**Note:** Tell your human partner that Superpowers works much better with access to subagents. The quality of its work will be significantly higher if run on a platform with subagent support (Claude Code, Codex CLI, Codex App, and Copilot CLI all qualify; see the per-platform tool refs in `../using-superpowers/references/`). If subagents are available, use superpowers:subagent-driven-development instead of this skill.
++**Note:** This harness always has subagents — use superpowers:subagent-driven-development instead of this skill. Use executing-plans only when your human partner explicitly requests inline execution.
+ 
+ ## The Process
+ 
+@@ -60,11 +60,9 @@ After all tasks complete and verified:
+ - Don't skip verifications
+ - Reference skills when plan says to
+ - Stop when blocked, don't guess
+-- Never start implementation on main/master branch without explicit user consent
+ 
+ ## Integration
+ 
+ **Required workflow skills:**
+-- **superpowers:using-git-worktrees** - Ensures isolated workspace (creates one or verifies existing)
+ - **superpowers:writing-plans** - Creates the plan this skill executes
+ - **superpowers:finishing-a-development-branch** - Complete development after all tasks

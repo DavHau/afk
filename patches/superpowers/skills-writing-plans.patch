@@ -1,0 +1,131 @@
+afk: plans must expose parallelism; implementers do not commit.
+
+Motivation: execution happens as parallel waves of isolated subagents
+(see skills-subagent-driven-development.patch), so every plan needs a
+machine-followable map of which tasks can run concurrently, and
+per-task git commit steps are meaningless — the orchestrator lands each
+task by cherry-picking its parked ref.
+
+What must survive a rebase:
+- Plan header REQUIRES a "## Dependency Map" section: per-task
+  depends-on edges derived from the Interfaces Consumes/Produces
+  blocks, plus wave grouping; guidance to minimize edges (wide waves
+  beat deep chains).
+- Task template carries "**Depends on:**" and ends at the passing-test
+  step — no commit step, no "frequent commits" anywhere.
+- Self-review includes the dependency check (map matches Interfaces,
+  acyclic, no edge without a consumed interface).
+- Execution handoff describes option 1 as parallel isolated subagents
+  per Dependency Map wave.
+- Dropped on purpose: the worktree provisioning context line.
+
+diff --git a/skills/writing-plans/SKILL.md b/skills/writing-plans/SKILL.md
+index b1613eb..4708791 100644
+--- a/skills/writing-plans/SKILL.md
++++ b/skills/writing-plans/SKILL.md
+@@ -7,14 +7,12 @@ description: Use when you have a spec or requirements for a multi-step task, bef
+ 
+ ## Overview
+ 
+-Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
++Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD.
+ 
+ Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
+ 
+ **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
+ 
+-**Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
+-
+ **Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
+ - (User preferences for plan location override this default)
+ 
+@@ -49,7 +47,6 @@ independently testable deliverable.
+ - "Run it to make sure it fails" - step
+ - "Implement the minimal code to make the test pass" - step
+ - "Run the tests and make sure they pass" - step
+-- "Commit" - step
+ 
+ ## Plan Document Header
+ 
+@@ -73,6 +70,21 @@ naming and copy rules, platform requirements — one line each, with exact
+ values copied verbatim from the spec. Every task's requirements implicitly
+ include this section.]
+ 
++## Dependency Map
++
++[Which tasks can run in parallel. Derive the edges from each task's
++Interfaces block: task B depends on task A only when B consumes an
++interface A produces. Minimize dependencies when drawing task boundaries —
++wide waves beat deep chains; every needless edge serializes work.]
++
++- Task 1: no dependencies
++- Task 2: no dependencies
++- Task 3: depends on 1, 2
++
++Waves (each wave = one parallel batch of isolated implementers):
++1. Tasks 1, 2
++2. Task 3
++
+ ---
+ ```
+ 
+@@ -92,6 +104,9 @@ include this section.]
+   and return types. A task's implementer sees only their own task; this
+   block is how they learn the names and types neighboring tasks use.]
+ 
++**Depends on:** [task numbers whose Produces this task consumes — none =
++ready in the first wave. Must match the Dependency Map.]
++
+ - [ ] **Step 1: Write the failing test**
+ 
+ ```python
+@@ -116,13 +131,6 @@ def function(input):
+ 
+ Run: `pytest tests/path/test.py::test_name -v`
+ Expected: PASS
+-
+-- [ ] **Step 5: Commit**
+-
+-```bash
+-git add tests/path/test.py src/path/file.py
+-git commit -m "feat: add specific feature"
+-```
+ ````
+ 
+ ## No Placeholders
+@@ -139,7 +147,7 @@ Every step must contain the actual content an engineer needs. These are **plan f
+ - Exact file paths always
+ - Complete code in every step — if a step changes code, show the code
+ - Exact commands with expected output
+-- DRY, YAGNI, TDD, frequent commits
++- DRY, YAGNI, TDD
+ 
+ ## Self-Review
+ 
+@@ -151,6 +159,8 @@ After writing the complete plan, look at the spec with fresh eyes and check the
+ 
+ **3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
+ 
++**4. Dependency check:** Does the Dependency Map match the Interfaces blocks? Every "Consumes" implies an edge; a task with no incoming edges belongs to the first wave. No cycle, no edge without a consumed interface.
++
+ If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
+ 
+ ## Execution Handoff
+@@ -159,7 +169,7 @@ After saving the plan, offer execution choice:
+ 
+ **"Plan complete and saved to `docs/superpowers/plans/<filename>.md`. Two execution options:**
+ 
+-**1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
++**1. Subagent-Driven (recommended)** - I dispatch parallel isolated subagents per Dependency Map wave, review gating each merge, fast iteration
+ 
+ **2. Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
+ 
+@@ -167,7 +177,7 @@ After saving the plan, offer execution choice:
+ 
+ **If Subagent-Driven chosen:**
+ - **REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development
+-- Fresh subagent per task + two-stage review
++- Parallel isolated implementers per wave + two-stage review
+ 
+ **If Inline Execution chosen:**
+ - **REQUIRED SUB-SKILL:** Use superpowers:executing-plans

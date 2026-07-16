@@ -1,3 +1,17 @@
+afk: pure refactor — extract isolated-task VCS operations behind a
+VcsHandle interface (src/task/vcs.ts, GitCheckoutHandle).
+
+Motivation: preparation for omp-jj-workspace-handle.patch, which adds a
+second implementation (JjWorkspaceHandle) for pure jj workspaces. No
+behavior change; git code paths move behind the interface unchanged.
+
+What must survive a rebase:
+- Only the seam matters: baseline capture, commit-to-ref, merge, and
+  cleanup go through a VcsHandle so a jj implementation can slot in.
+  If upstream refactors these functions, re-cut the seam at the
+  equivalent points; behavior must remain byte-identical for git repos.
+- Apply order: this patch precedes omp-jj-workspace-handle.patch.
+
 diff --git a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
 index ef11527..f954351 100644
 --- a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts

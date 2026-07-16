@@ -1,3 +1,21 @@
+afk: JjWorkspaceHandle — isolated subagents inside pure jj workspaces
+(secondary `jj workspace add` trees, non-colocated repos).
+
+Motivation: upstream isolation assumes a git checkout. In a pure jj
+workspace there is no .git worktree to snapshot against, but jj has a
+backing git store: capture runs against it (baseline = the @ commit,
+task refs parked as refs/omp/task/<id> in the store) and merges land as
+a described jj commit, 3-way merged in-store via git merge-tree — a
+conflict leaves the workspace untouched with the ref still parked.
+
+What must survive a rebase:
+- resolveJjWorkspaceHandle detection (vcs-jj.ts) plugging into the
+  VcsHandle seam from omp-vcs-handle-seam.patch (apply after it).
+- The snapshot's .jj pointer is removed before the subagent runs —
+  nothing inside isolation may write through to the shared jj store.
+- Conflict behavior: in-store merge failure = workspace untouched, ref
+  parked; nested git repos under a jj workspace are not captured.
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
 index 1956bf9..4604837 100644
 --- a/docs/tools/task.md
