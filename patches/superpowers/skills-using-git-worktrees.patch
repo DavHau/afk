@@ -4,30 +4,41 @@ Motivation: the harness provides isolation via isolated: true task
 subagents (copy-on-write snapshots + parked task refs). Manual
 `git worktree add` / `jj workspace add` create phantom state the
 harness cannot manage and destabilize the jj-colocated checkout. The
-skill file stays (its frontmatter description still matches trigger
-phrases) but the body is a full replacement redirecting to flag-based
-isolation. The body says explicitly that `isolated` is a REQUIRED,
-non-implicit task-tool parameter — an earlier "isolation is native"
-phrasing led models to assume the harness isolates by default and omit
-the flag.
+skill file stays as a pure redirect: its frontmatter description keeps
+upstream's trigger phrases ("needs isolation from current workspace",
+"before executing implementation plans") but no longer advertises
+worktree creation — an earlier "isolation is native" phrasing and the
+upstream "git worktree fallback" description led models to assume the
+harness isolates by default and omit the flag.
 
 What must survive a rebase:
-- Body = redirect: NEVER git worktree add / jj workspace add / consent
-  question; wanting isolation = delegating to subagents dispatched with
-  isolated: true; a referenced "create an isolated workspace" step
-  counts as satisfied.
+- Frontmatter description: keep the trigger phrases, never the
+  "worktree fallback" tail — the redirect must not advertise the
+  behavior it forbids.
+- Body = redirect ONLY: NEVER git worktree add / jj workspace add /
+  consent question; wanting isolation = delegating to subagents
+  dispatched with isolated: true; a referenced "create an isolated
+  workspace" step counts as satisfied.
 - Isolation stated as opt-in: REQUIRED flag, NOT implicit,
   isolated: false = runs directly in the parent worktree.
-- Keep the pre-dispatch checks (project setup + clean test baseline in
-  the main workspace) — the only upstream content worth preserving.
+- Pre-dispatch baseline checks do NOT live here anymore — they moved to
+  subagent-driven-development ("Pre-Dispatch Baseline"); keep the
+  pointer to that section.
 - Upstream restructures of its Steps 0-3 can be discarded wholesale;
   regenerate this patch as a full-body replacement.
 
 diff --git a/skills/using-git-worktrees/SKILL.md b/skills/using-git-worktrees/SKILL.md
-index 212c569..f41a3ac 100644
+index 212c569..70f4d14 100644
 --- a/skills/using-git-worktrees/SKILL.md
 +++ b/skills/using-git-worktrees/SKILL.md
-@@ -7,196 +7,42 @@ description: Use when starting feature work that needs isolation from current wo
+@@ -1,202 +1,34 @@
+ ---
+ name: using-git-worktrees
+-description: Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback
++description: Use when starting feature work that needs isolation from current workspace or before executing implementation plans - on this harness isolation comes from dispatching subagents with isolated true, never from creating worktrees
+ ---
+ 
+ # Using Git Worktrees
  
  ## Overview
  
@@ -154,48 +165,14 @@ index 212c569..f41a3ac 100644
 -**If tests fail:** Report failures, ask whether to proceed or investigate.
 -
 -**If tests pass:** Report ready.
-+On this harness, isolation is one flag away — never a worktree: subagents
-+dispatched with `isolated: true` each work in their own copy-on-write
-+snapshot and return their changes as parked task refs (see the
-+always-applied `isolated-task-merge` rule). The flag is a REQUIRED task-tool
-+parameter and is NOT implicit — `isolated: false` runs the subagent directly
-+in your worktree. There is nothing else to set up.
-+
-+**Core principle:** Wanting isolation = wanting delegation. Dispatch the
-+work as `task` subagents with `isolated: true`; the top-level agent works
-+in place.
-+
-+**NEVER:**
-+- Run `git worktree add` — manual worktrees create phantom state the
-+  harness can't see or manage.
-+- Run `jj workspace add` — same problem, jj flavor.
-+- Ask the user whether to set up a worktree. The answer is native
-+  isolation, and it needs no consent or setup.
-+
-+If a skill or plan references this skill "to create an isolated
-+workspace", treat that step as satisfied: execution via subagents
-+dispatched with `isolated: true` already provides it.
-+
-+## Pre-Dispatch Checks
-+
-+Before dispatching the first isolated implementer, verify the baseline in
-+the main workspace:
-+
-+1. **Project setup:** dependencies installed, build works (`npm install`,
-+   `cargo build`, … as the project demands).
-+2. **Clean test baseline:** run the project's test suite. If tests fail,
-+   report failures and ask whether to proceed or investigate — otherwise
-+   new bugs are indistinguishable from pre-existing ones.
- 
- ### Report
- 
- ```
+-
+-### Report
+-
+-```
 -Worktree ready at <full-path>
 -Tests passing (<N> tests, 0 failures)
 -Ready to implement <feature-name>
-+Baseline clean (<N> tests, 0 failures)
-+Ready to dispatch isolated implementers for <feature-name>
- ```
+-```
 -
 -## Quick Reference
 -
@@ -258,3 +235,28 @@ index 212c569..f41a3ac 100644
 -- Verify directory is ignored for project-local
 -- Auto-detect and run project setup
 -- Verify clean test baseline
++On this harness, isolation is one flag away — never a worktree: subagents
++dispatched with `isolated: true` each work in their own copy-on-write
++snapshot and return their changes as parked task refs (see the
++always-applied `isolated-task-merge` rule). The flag is a REQUIRED task-tool
++parameter and is NOT implicit — `isolated: false` runs the subagent directly
++in your worktree. There is nothing else to set up.
++
++**Core principle:** Wanting isolation = wanting delegation. Dispatch the
++work as `task` subagents with `isolated: true`; the top-level agent works
++in place.
++
++**NEVER:**
++- Run `git worktree add` — manual worktrees create phantom state the
++  harness can't see or manage.
++- Run `jj workspace add` — same problem, jj flavor.
++- Ask the user whether to set up a worktree. The answer is flag-based
++  isolation, and it needs no consent or setup.
++
++If a skill or plan references this skill "to create an isolated
++workspace", treat that step as satisfied: execution via subagents
++dispatched with `isolated: true` already provides it.
++
++Baseline verification before the first implementer wave (project setup +
++clean test suite) lives in superpowers:subagent-driven-development, under
++"Pre-Dispatch Baseline".

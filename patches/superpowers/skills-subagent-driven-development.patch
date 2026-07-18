@@ -20,6 +20,10 @@ What must survive a rebase:
   its parked ref (review-package "$(git merge-base HEAD <ref>)" <ref>);
   merge only approved refs; wave review after a wave is fully merged;
   final whole-branch review unchanged.
+- "Pre-Dispatch Baseline" section (project setup + clean test suite in
+  the main workspace before wave 1) — moved here from
+  using-git-worktrees, which is now a pure redirect and points back at
+  this section.
 - `isolated: true` stated as an explicit REQUIRED task-tool parameter
   on every implementer item (wave-scheduling bullet + implementer
   template field), never as an implicit property of the harness.
@@ -35,7 +39,7 @@ What must survive a rebase:
   bullet (isolation comes from the isolated flag, not a worktree).
 
 diff --git a/skills/subagent-driven-development/SKILL.md b/skills/subagent-driven-development/SKILL.md
-index d8ca081..7c49ae1 100644
+index d8ca081..6fccf1e 100644
 --- a/skills/subagent-driven-development/SKILL.md
 +++ b/skills/subagent-driven-development/SKILL.md
 @@ -5,11 +5,11 @@ description: Use when executing implementation plans with independent tasks in t
@@ -52,7 +56,7 @@ index d8ca081..7c49ae1 100644
  
  **Narration:** between tool calls, narrate at most one short line — the
  ledger and the tool results carry the record.
-@@ -48,43 +48,66 @@ digraph when_to_use {
+@@ -48,43 +48,84 @@ digraph when_to_use {
  digraph process {
      rankdir=TB;
  
@@ -118,6 +122,24 @@ index d8ca081..7c49ae1 100644
  }
  ```
  
++### Pre-Dispatch Baseline
++
++Before dispatching the first implementer wave, verify the baseline in the
++main workspace:
++
++1. **Project setup:** dependencies installed, build works (`npm install`,
++   `cargo build`, … as the project demands).
++2. **Clean test baseline:** run the project's test suite. If tests fail,
++   report failures and ask whether to proceed or investigate — otherwise
++   new bugs are indistinguishable from pre-existing ones.
++
++Report before wave 1:
++
++```
++Baseline clean (<N> tests, 0 failures)
++Ready to dispatch isolated implementers for <feature-name>
++```
++
 +### Wave Scheduling
 +
 +- The plan's Dependency Map defines the waves: a task is ready when every
@@ -147,7 +169,7 @@ index d8ca081..7c49ae1 100644
  
  - tasks that contradict each other or the plan's Global Constraints
  - anything the plan explicitly mandates that the review rubric treats as a
-@@ -96,56 +119,43 @@ before execution begins, not one interrupt per discovery mid-plan. If the
+@@ -96,56 +137,43 @@ before execution begins, not one interrupt per discovery mid-plan. If the
  scan is clean, proceed without comment. The review loop remains the net for
  conflicts that only emerge from implementation.
  
@@ -219,7 +241,7 @@ index d8ca081..7c49ae1 100644
  
  ## Handling Reviewer ⚠️ Items
  
-@@ -184,8 +194,9 @@ final whole-branch review. When you fill a reviewer template:
+@@ -184,8 +212,9 @@ final whole-branch review. When you fill a reviewer template:
    and `git diff -U10` for the range, redirected to one uniquely named
    file). The output never enters your own context, and the reviewer sees
    the commit list, stat summary, and full diff with context in one Read
@@ -231,7 +253,7 @@ index d8ca081..7c49ae1 100644
  - A dispatch prompt describes one task, not the session's history. Do not
    paste accumulated prior-task summaries ("state after Tasks 1-3") into
    later dispatches — a real session's dispatch hit 42k chars of which 99%
-@@ -236,7 +247,7 @@ and is re-read on every later turn. Hand artifacts over as files:
+@@ -236,7 +265,7 @@ and is re-read on every later turn. Hand artifacts over as files:
  - **Report file:** name the implementer's report file after the brief
    (brief `…/task-N-brief.md` → report `…/task-N-report.md`) and put it in
    the dispatch prompt. The implementer writes the full report there and
@@ -240,7 +262,7 @@ index d8ca081..7c49ae1 100644
  - **Reviewer inputs:** the task reviewer gets three paths — the same brief
    file, the report file, and the review package — plus the global
    constraints that bind the task.
-@@ -256,7 +267,7 @@ a ledger file, not only in todos.
+@@ -256,7 +285,7 @@ a ledger file, not only in todos.
    not marked complete.
  - When a task's review comes back clean, append one line to the ledger in
    the same message as your other bookkeeping:
@@ -249,7 +271,7 @@ index d8ca081..7c49ae1 100644
  - The ledger is your recovery map: the commits it names exist in git even
    when your context no longer remembers creating them. After compaction,
    trust the ledger and `git log` over your own recollection.
-@@ -275,53 +286,56 @@ a ledger file, not only in todos.
+@@ -275,53 +304,56 @@ a ledger file, not only in todos.
  You: I'm using Subagent-Driven Development to execute this plan.
  
  [Read plan file once: docs/superpowers/plans/feature-plan.md]
@@ -324,7 +346,7 @@ index d8ca081..7c49ae1 100644
  
  ...
  
-@@ -337,7 +351,7 @@ Done!
+@@ -337,7 +369,7 @@ Done!
  **vs. Manual execution:**
  - Subagents follow TDD naturally
  - Fresh context per task (no confusion)
@@ -333,7 +355,7 @@ index d8ca081..7c49ae1 100644
  - Subagent can ask questions (before AND during work)
  
  **vs. Executing Plans:**
-@@ -367,10 +381,9 @@ Done!
+@@ -367,10 +399,9 @@ Done!
  ## Red Flags
  
  **Never:**
@@ -345,7 +367,7 @@ index d8ca081..7c49ae1 100644
  - Make a subagent read the whole plan file (hand it its task brief —
    `scripts/task-brief` — instead)
  - Skip scene-setting context (subagent needs to understand where task fits)
-@@ -382,8 +395,8 @@ Done!
+@@ -382,8 +413,8 @@ Done!
    dispatch prompt ("treat it as Minor at most") — the plan's example code is
    a starting point, not evidence that its weaknesses were chosen
  - Dispatch a task reviewer without a diff file — generate it first
@@ -356,7 +378,7 @@ index d8ca081..7c49ae1 100644
  - Move to next task while the review has open Critical/Important issues
  - Re-dispatch a task the progress ledger already marks complete — check
    the ledger (and `git log`) after any compaction or resume
-@@ -406,7 +419,6 @@ Done!
+@@ -406,7 +437,6 @@ Done!
  ## Integration
  
  **Required workflow skills:**
