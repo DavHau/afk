@@ -13,7 +13,6 @@ import {
 	type DirenvPi,
 	type DirenvRunResult,
 	type DirenvState,
-	isTaskIsolationWorktree,
 } from "./direnv";
 
 describe("applyDirenvExport", () => {
@@ -38,28 +37,6 @@ describe("applyDirenvExport", () => {
 		const env: Record<string, string | undefined> = { KEEP: "1" };
 		expect(applyDirenvExport("{not json", env)).toEqual({ ok: false, loaded: 0, unset: 0 });
 		expect(env).toEqual({ KEEP: "1" });
-	});
-});
-
-describe("isTaskIsolationWorktree", () => {
-	const base = "/home/u/.omp/wt";
-
-	it("matches <base>/t<9hex>/m and subpaths, plus the legacy 'merged' mount", () => {
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/m", base)).toBe(true);
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/m/sub/dir", base)).toBe(true);
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/merged", base)).toBe(true);
-	});
-
-	it("rejects paths outside the base, the base itself, and non-isolation segments", () => {
-		expect(isTaskIsolationWorktree("/proj", base)).toBe(false);
-		expect(isTaskIsolationWorktree(base, base)).toBe(false);
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde", base)).toBe(false);
-		// gh PR checkout segment (not t<9hex>) and wrong mount dir
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/123-abcdef/m", base)).toBe(false);
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/other", base)).toBe(false);
-		// digest must be exactly 9 hex chars
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcd/m", base)).toBe(false);
-		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcdef/m", base)).toBe(false);
 	});
 });
 
@@ -177,51 +154,75 @@ describe("createDirenvLoader", () => {
 		await second;
 	});
 
-	it("runs allow before the export when autoAllow returns true", async () => {
+	it("retries the export after allow when the first export fails (blocked .envrc)", async () => {
 		const order: string[] = [];
 		const env: Record<string, string | undefined> = {};
+		const statuses: DirenvState[] = [];
+		let exports = 0;
 		const loader = createDirenvLoader({
 			env,
 			run: async cwd => {
 				order.push(`run:${cwd}`);
-				return { code: 0, stdout: JSON.stringify({ FOO: "bar" }) };
+				return ++exports === 1 ? { code: 1, stdout: "" } : { code: 0, stdout: JSON.stringify({ FOO: "bar" }) };
 			},
 			allow: async cwd => {
 				order.push(`allow:${cwd}`);
 				return { code: 0, stdout: "" };
 			},
-			autoAllow: cwd => cwd === "/wt/t0123abcde/m",
 		});
-		await loader.load("/wt/t0123abcde/m");
-		expect(order).toEqual(["allow:/wt/t0123abcde/m", "run:/wt/t0123abcde/m"]);
+		await loader.load("/proj", state => statuses.push(state));
+		expect(order).toEqual(["run:/proj", "allow:/proj", "run:/proj"]);
+		expect(statuses).toEqual(["loading", "ok"]);
 		expect(env.FOO).toBe("bar");
 	});
 
-	it("skips allow when autoAllow returns false or is absent", async () => {
+	it("does not call allow when the first export succeeds", async () => {
 		const order: string[] = [];
-		const allow = async (cwd: string) => {
-			order.push(`allow:${cwd}`);
-			return { code: 0, stdout: "" };
-		};
-		const run = async (cwd: string) => {
-			order.push(`run:${cwd}`);
-			return { code: 0, stdout: "{}" };
-		};
-		await createDirenvLoader({ env: {}, run, allow, autoAllow: () => false }).load("/proj");
-		await createDirenvLoader({ env: {}, run, allow }).load("/proj");
-		expect(order).toEqual(["run:/proj", "run:/proj"]);
+		const loader = createDirenvLoader({
+			env: {},
+			run: async () => {
+				order.push("run");
+				return { code: 0, stdout: "{}" };
+			},
+			allow: async () => {
+				order.push("allow");
+				return { code: 0, stdout: "" };
+			},
+		});
+		await loader.load("/proj");
+		expect(order).toEqual(["run"]);
 	});
 
-	it("still exports when allow rejects or fails", async () => {
-		const env: Record<string, string | undefined> = {};
+	it("emits error when the retried export fails too, allowing only once", async () => {
+		const order: string[] = [];
 		const statuses: DirenvState[] = [];
 		const loader = createDirenvLoader({
-			env,
-			run: async () => ({ code: 0, stdout: JSON.stringify({ FOO: "bar" }) }),
-			allow: () => Promise.reject(new Error("no .envrc found")),
-			autoAllow: () => true,
+			env: { KEEP: "1" },
+			run: async () => {
+				order.push("run");
+				return { code: 1, stdout: "" };
+			},
+			allow: async () => {
+				order.push("allow");
+				return { code: 0, stdout: "" };
+			},
 		});
-		await loader.load("/wt", state => statuses.push(state));
+		await loader.load("/proj", state => statuses.push(state));
+		expect(order).toEqual(["run", "allow", "run"]);
+		expect(statuses).toEqual(["loading", "error"]);
+	});
+
+	it("still retries the export when allow rejects", async () => {
+		const env: Record<string, string | undefined> = {};
+		const statuses: DirenvState[] = [];
+		let exports = 0;
+		const loader = createDirenvLoader({
+			env,
+			run: async () =>
+				++exports === 1 ? { code: 1, stdout: "" } : { code: 0, stdout: JSON.stringify({ FOO: "bar" }) },
+			allow: () => Promise.reject(new Error("direnv missing")),
+		});
+		await loader.load("/proj", state => statuses.push(state));
 		expect(statuses).toEqual(["loading", "ok"]);
 		expect(env.FOO).toBe("bar");
 	});
