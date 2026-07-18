@@ -231,13 +231,13 @@ interface FakeCtx {
 	cwd: string;
 	hasUI: boolean;
 	ui: {
-		setStatus: (key: string, text: string) => void;
+		setStatus: (key: string, text: string | undefined) => void;
 		theme: { fg: (color: string, text: string) => string };
 	};
 }
 
 function makeCtx(over: Partial<FakeCtx> = {}) {
-	const statusLog: Array<[string, string]> = [];
+	const statusLog: Array<[string, string | undefined]> = [];
 	const ctx: FakeCtx = {
 		cwd: "/proj",
 		hasUI: true,
@@ -343,7 +343,7 @@ describe("createDirenvExtension", () => {
 		expect(calls).toEqual(["/proj"]);
 	});
 
-	it("renders themed status: loading while running, then ok on success", async () => {
+	it("renders themed status: loading while running, then clears on success", async () => {
 		const { pi, events } = makePi();
 		const gate = Promise.withResolvers<DirenvRunResult>();
 		createDirenvExtension(pi, { env: {}, run: () => gate.promise });
@@ -354,7 +354,7 @@ describe("createDirenvExtension", () => {
 		gate.resolve({ code: 0, stdout: "{}" });
 		await emitting;
 		await Bun.sleep(0);
-		expect(statusLog.at(-1)).toEqual(["direnv", "[success]direnv ✓"]);
+		expect(statusLog.at(-1)).toEqual(["direnv", undefined]);
 	});
 
 	it("renders themed error status when direnv fails", async () => {

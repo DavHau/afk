@@ -31,7 +31,9 @@
  * usual blocked ✗ until the user re-allows).
  *
  * Requirements: direnv on PATH, `.envrc` allowed (`direnv allow`).
- * Status bar: "direnv …" (running), "direnv ✓" (loaded), "direnv ✗" (error).
+ * Status bar: "direnv …" while a load runs, "direnv ✗" on error; cleared
+ * on success — a persistent "✓" carries no information and omp renders
+ * hook statuses as a bare line floating above the editor.
  *
  * Loaded from $config_dir/extensions/direnv.ts; tests in direnv.test.ts
  * run via bun against an oh-my-pi checkout (see test header).
@@ -75,7 +77,7 @@ export interface DirenvCtx {
 	cwd: string;
 	hasUI: boolean;
 	ui: {
-		setStatus(key: string, text: string): void;
+		setStatus(key: string, text: string | undefined): void;
 		theme: { fg(color: string, text: string): string };
 	};
 }
@@ -174,12 +176,13 @@ export function createDirenvLoader(deps: DirenvLoaderDeps) {
 	return { load };
 }
 
-function themedStatus(ctx: DirenvCtx, state: DirenvState): string {
+function themedStatus(ctx: DirenvCtx, state: DirenvState): string | undefined {
 	switch (state) {
 		case "loading":
 			return ctx.ui.theme.fg("warning", "direnv …");
 		case "ok":
-			return ctx.ui.theme.fg("success", "direnv ✓");
+			// Clear the status: success is the steady state, not news.
+			return undefined;
 		case "error":
 			return ctx.ui.theme.fg("error", "direnv ✗");
 	}
