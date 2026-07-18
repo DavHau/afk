@@ -1,0 +1,254 @@
+afk: make the task tool's `isolated` flag required whenever isolation is
+enabled.
+
+Motivation: upstream treats `isolated` as opt-in-and-optional — a spawn
+that omits it silently runs the subagent directly in the parent
+worktree (structured-subagent.ts: `isolation?.requested === true`).
+Skill text describing the distribution's isolated-parallel workflow in
+the indicative mood ("file-editing dispatches run isolated") led models
+to believe isolation was the harness default, so implementer subagents
+were dispatched without the flag and edited the shared tree. Making the
+field required in the isolation-enabled wire schemas forces an explicit
+choice on every dispatch; a forgotten flag becomes a schema error the
+model self-corrects (the error carries the schema) instead of a silent
+in-tree run.
+
+Scope: wire schemas only (types.ts: exported flat `taskSchema`, batch
+item schema, and both isolation-enabled `createTaskSchema` variants).
+The `TaskItem`/`TaskParams` interfaces stay optional — args stream in
+partially during rendering, and internal callers / stale transcripts
+bypass arktype (index.ts execute() tolerates unvalidated input). The
+eval `agent()` bridge (eval/agent-bridge.ts) keeps its own optional
+`isolated` — a deliberate, documented gap: afk's skills route all
+dispatching through the task tool, and one-off read-only `agent()`
+calls stay ergonomic.
+
+What must survive a rebase:
+- The isolation-enabled schemas (flat + batch item) declare `isolated`
+  as REQUIRED; the no-isolation / plan-mode schemas keep NOT exposing
+  the field at all.
+- The tool description (src/prompts/tools/task.md) states: REQUIRED,
+  true = snapshot + parked changes, false = edits the parent worktree
+  directly, file-editing work MUST be true.
+- Tests: wire-schema.test.ts rejects a missing `isolated` on the
+  isolation-enabled schema; task-batch.test.ts asserts `required`
+  contains "isolated" in batch-item and flat wire schemas and not when
+  isolation is off.
+
+diff --git a/docs/tools/task.md b/docs/tools/task.md
+index e539020..497b4b0 100644
+--- a/docs/tools/task.md
++++ b/docs/tools/task.md
+@@ -26,7 +26,7 @@
+ 
+ ## Inputs
+ 
+-The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
++The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, isolated }` (`isolated` exists — and is required — only when `task.isolation.mode` is not `none`):
+ 
+ - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent` and `isolated` are per item, so one call may mix agent types.
+ - **Flat shape** (`task.batch` off): `{ ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each spawn's `task` references; subagents share the parent's `local://` root.
+@@ -38,7 +38,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
+ | `name` | `string` | No | Stable agent name — becomes the registry/IRC id. Defaults to a generated AdjectiveNoun name. Uniquified per session by `AgentOutputManager`. Item field in batch shape, top-level in flat shape. |
+ | `agent` | `string` | No | Agent type to run this item (e.g. `scout`). Defaults to the spawn policy's default agent (usually `task`); items in one batch call may use different agent types. Item field in batch shape, top-level in flat shape. |
+ | `task` | `string` | Yes | The work — complete, self-contained instructions. Empty-after-trim is rejected. Item field in batch shape, top-level in flat shape. |
+-| `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
++| `isolated` | `boolean` | Yes (when present) | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none`, and is then required — the caller must choose explicitly per spawn; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
+ 
+ There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
+ 
+diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
+index 08fed3a..eab177f 100644
+--- a/packages/coding-agent/src/prompts/tools/task.md
++++ b/packages/coding-agent/src/prompts/tools/task.md
+@@ -18,7 +18,7 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
+   - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
+   - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
+ {{#if isolationEnabled}}
+-  - `isolated`: Run in dedicated worktree, return patches. Destroyed on completion, cannot be addressed afterward.
++  - `isolated`: REQUIRED — choose per item. `true`: runs in a copy-on-write snapshot; changes come back as parked refs/patches, never touching your worktree; destroyed on completion, cannot be addressed afterward. `false`: the subagent edits YOUR worktree directly. Any item that edits files MUST set `true`; `false` is only for read-only work.
+ {{/if}}
+ {{else}}
+ - `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
+@@ -27,7 +27,7 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
+ - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
+ - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
+ {{#if isolationEnabled}}
+-- `isolated`: Run in dedicated worktree, return patches.
++- `isolated`: REQUIRED. `true`: runs in a copy-on-write snapshot; changes come back as parked refs/patches, never touching your worktree. `false`: the subagent edits YOUR worktree directly. File-editing work MUST set `true`; `false` is only for read-only work.
+ {{/if}}
+ {{/if}}
+ 
+diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
+index 62007fd..67469c5 100644
+--- a/packages/coding-agent/src/task/types.ts
++++ b/packages/coding-agent/src/task/types.ts
+@@ -123,7 +123,7 @@ const taskItemSchemaIsolated = type({
+ 	task: "string",
+ 	"outputSchema?": outputSchemaInputSchema,
+ 	"schemaMode?": '"permissive" | "strict"',
+-	"isolated?": "boolean",
++	isolated: "boolean",
+ 	"+": "delete",
+ });
+ 
+@@ -139,7 +139,12 @@ export interface TaskItem {
+ 	outputSchema?: unknown;
+ 	/** Validation behavior for a caller-provided or inherited output schema. */
+ 	schemaMode?: "permissive" | "strict";
+-	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
++	/**
++	 * Run this spawn in an isolated worktree (batch form; flat form carries it
++	 * top-level). Required on the wire when isolation is enabled — the model
++	 * must choose explicitly; optional here because args stream in partially
++	 * and internal callers bypass arktype.
++	 */
+ 	isolated?: boolean;
+ }
+ 
+@@ -149,7 +154,7 @@ export const taskSchema = type({
+ 	task: "string",
+ 	"outputSchema?": outputSchemaInputSchema,
+ 	"schemaMode?": '"permissive" | "strict"',
+-	"isolated?": "boolean",
++	isolated: "boolean",
+ 	"+": "delete",
+ });
+ const taskSchemaNoIsolation = type({
+@@ -202,7 +207,7 @@ function createTaskSchema(options: {
+ 				task: "string",
+ 				"outputSchema?": outputSchemaInputSchema,
+ 				"schemaMode?": '"permissive" | "strict"',
+-				"isolated?": "boolean",
++				isolated: "boolean",
+ 				"+": "delete",
+ 			});
+ 			return type.raw({
+@@ -232,7 +237,7 @@ function createTaskSchema(options: {
+ 			task: "string",
+ 			"outputSchema?": outputSchemaInputSchema,
+ 			"schemaMode?": '"permissive" | "strict"',
+-			"isolated?": "boolean",
++			isolated: "boolean",
+ 			"+": "delete",
+ 		});
+ 	}
+diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
+index 9af6cb4..1db5b17 100644
+--- a/packages/coding-agent/test/task/task-batch.test.ts
++++ b/packages/coding-agent/test/task/task-batch.test.ts
+@@ -137,6 +137,29 @@ describe("task.batch schema gating", () => {
+ 		expect(items?.properties?.isolated).toBeDefined();
+ 	});
+ 
++	it("requires isolated on every item when isolation is enabled", async () => {
++		mockDiscovery();
++
++		const batch = await TaskTool.create(
++			createSession({ settings: { "task.batch": true, "task.isolation.mode": "auto" } }),
++		);
++		const items = (getSchemaProperties(batch).tasks as { items?: { required?: string[] } }).items;
++		expect(items?.required).toContain("isolated");
++
++		const flat = await TaskTool.create(
++			createSession({ settings: { "task.batch": false, "task.isolation.mode": "auto" } }),
++		);
++		const wire = toolWireSchema(flat) as { required?: string[] };
++		expect(wire.required).toContain("isolated");
++
++		// Isolation off: the field does not exist, so it cannot be required.
++		const off = await TaskTool.create(
++			createSession({ settings: { "task.batch": true, "task.isolation.mode": "none" } }),
++		);
++		const offItems = (getSchemaProperties(off).tasks as { items?: { required?: string[] } }).items;
++		expect(offItems?.required ?? []).not.toContain("isolated");
++	});
++
+ 	it("hides isolation from the dynamic batch schema in plan mode", async () => {
+ 		mockDiscovery();
+ 		const tool = await TaskTool.create(
+diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
+index 9e65f36..fb50e5c 100644
+--- a/packages/coding-agent/test/task/task-schema.test.ts
++++ b/packages/coding-agent/test/task/task-schema.test.ts
+@@ -13,12 +13,12 @@ import { type } from "arktype";
+ 
+ describe("task schema (single-spawn)", () => {
+ 	it("accepts {agent, task}", () => {
+-		const parsed = taskSchema({ agent: "explore", task: "Map the auth module." });
++		const parsed = taskSchema({ agent: "explore", task: "Map the auth module.", isolated: false });
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 	});
+ 
+ 	it("defaults agent to `task` when omitted", () => {
+-		const parsed = taskSchema({ task: "Map the auth module." });
++		const parsed = taskSchema({ task: "Map the auth module.", isolated: false });
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 		if (!(parsed instanceof type.errors)) {
+ 			expect(parsed.agent).toBe("task");
+@@ -36,6 +36,7 @@ describe("task schema (single-spawn)", () => {
+ 			agent: "explore",
+ 			task: "Map the auth module.",
+ 			outputSchema,
++			isolated: false,
+ 			schemaMode: "strict",
+ 			context: "shared background",
+ 			tasks: [{ name: "A", task: "..." }],
+diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
+index 78c11d1..4420227 100644
+--- a/packages/coding-agent/test/task/wire-schema.test.ts
++++ b/packages/coding-agent/test/task/wire-schema.test.ts
+@@ -6,9 +6,10 @@ import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/type
+ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+ import { type } from "arktype";
+ 
+-// Contract: the task tool's wire shape is flat `{ name?, agent?, task, isolated? }`
+-// (batch: `{ context, tasks[] }` of the same items). `agent` defaults to the
+-// schema's spawn-policy default, and unknown keys sent by stale callers (`role`,
++// Contract: the task tool's wire shape is flat `{ name?, agent?, task, isolated }`
++// (batch: `{ context, tasks[] }` of the same items; `isolated` exists — and is
++// required — only when isolation is enabled). `agent` defaults to the schema's
++// spawn-policy default, and unknown keys sent by stale callers (`role`,
+ // `description`) are stripped by the schema's `+: "delete"` — never rejected.
+ 
+ describe("oneLineLabel", () => {
+@@ -49,7 +50,7 @@ function parsedItems(parsed: unknown): Array<Record<string, unknown>> {
+ 
+ describe("task wire schema", () => {
+ 	it("accepts the flat { name, agent, task } shape", () => {
+-		const parsed = taskSchema({ name: "AuthLoader", agent: "scout", task: "map the auth flow" });
++		const parsed = taskSchema({ name: "AuthLoader", agent: "scout", task: "map the auth flow", isolated: false });
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 		if (!(parsed instanceof type.errors)) {
+ 			expect(parsed.name).toBe("AuthLoader");
+@@ -59,15 +60,28 @@ describe("task wire schema", () => {
+ 	});
+ 
+ 	it("defaults a missing agent to 'task'", () => {
+-		const parsed = taskSchema({ task: "x" });
++		const parsed = taskSchema({ task: "x", isolated: false });
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 		if (!(parsed instanceof type.errors)) {
+ 			expect(parsed.agent).toBe("task");
+ 		}
+ 	});
+ 
++	it("rejects a missing isolated on the isolation-enabled schema", () => {
++		// Isolation is opt-in per spawn; the schema forces the model to choose
++		// explicitly so a file-editing spawn can never silently run in-tree.
++		const parsed = taskSchema({ agent: "task", task: "x" });
++		expect(parsed instanceof type.errors).toBe(true);
++	});
++
+ 	it("deletes stale caller keys (role, description) instead of rejecting", () => {
+-		const parsed = taskSchema({ agent: "task", task: "x", role: "Rust specialist", description: "stale ui label" });
++		const parsed = taskSchema({
++			agent: "task",
++			task: "x",
++			isolated: false,
++			role: "Rust specialist",
++			description: "stale ui label",
++		});
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 		if (!(parsed instanceof type.errors)) {
+ 			expect("role" in parsed).toBe(false);

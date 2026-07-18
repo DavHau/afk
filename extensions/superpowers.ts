@@ -69,7 +69,7 @@ const OMP_TOOL_MAPPING = `## omp tool mapping
 
 omp has native skills: every available skill is listed in your system prompt with a \`skill://<name>\` URI. When a Superpowers instruction says to invoke a skill or use a "Skill tool", load it with the \`read\` tool (\`read skill://<name>\`) BEFORE acting on the task it applies to. Never read SKILL.md files by filesystem path.
 
-When Superpowers says to dispatch a subagent, use the \`task\` tool. Every dispatch that edits files runs with \`isolated: true\`. Isolated subagents never conflict while running — parallelize independent tasks freely and merge the parked changes afterwards per the always-applied \`isolated-task-merge\` rule. When a skill references a task list or TodoWrite, use the \`todo\` tool.
+When Superpowers says to dispatch a subagent, use the \`task\` tool. The \`isolated\` flag is REQUIRED on every dispatch (per item in a \`tasks[]\` batch) — the schema rejects calls without it, and isolation is opt-in: \`isolated: false\` runs the subagent DIRECTLY in your worktree. You MUST set \`isolated: true\` on every dispatch that edits files; \`isolated: false\` is only for read-only work (scout, reviewer, librarian). Isolated subagents never conflict while running — parallelize independent tasks freely and merge the parked changes afterwards per the always-applied \`isolated-task-merge\` rule. When a skill references a task list or TodoWrite, use the \`todo\` tool.
 
 Skill subagent roles map to omp agent types: "general-purpose"/implementer/fixer → \`task\`, code reviewer → \`reviewer\`, codebase research → \`scout\`, external library research → \`librarian\`, mechanical low-judgment work → \`sonic\`. Skill "model selection" instructions mean agent selection — there is no per-dispatch model parameter (cheap tier → \`sonic\`, standard → \`task\`; \`reviewer\` is already pinned to a top-tier model).
 
@@ -77,10 +77,10 @@ Skill subagent roles map to omp agent types: "general-purpose"/implementer/fixer
 
 afk mandates jj (Jujutsu); the always-applied distribution rule file \`jj-basics.md\` governs. Translate Superpowers' git vocabulary instead of running raw git workflows:
 
-- using-git-worktrees / "isolated workspace": NEVER create git worktrees or jj workspaces. Isolation is native — dispatch the work as \`isolated: true\` task subagents; the top-level agent works in place.
+- using-git-worktrees / "isolated workspace": NEVER create git worktrees or jj workspaces. Dispatch the work as task subagents with \`isolated: true\` — that flag alone provides the isolated workspace; the top-level agent works in place.
 - test-driven-development "commit after green": \`jj describe -m "<summary>"\` then \`jj new\`.
 - finishing-a-development-branch: land work with \`jj squash\` into the target commit or set a bookmark (\`jj bookmark set <name>\`) and \`jj git push\`; there is no local "delete the branch" step.
-- Isolated \`task\` subagents run NO version control at all — the harness captures their changes.`;
+- \`task\` subagents dispatched with \`isolated: true\` run NO version control at all — the harness captures their changes.`;
 
 export function buildBootstrap(skillContent: string): string {
 	const body = stripFrontmatter(skillContent);

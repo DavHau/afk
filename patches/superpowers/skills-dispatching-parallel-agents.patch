@@ -6,17 +6,23 @@ while running; overlaps surface as cherry-pick conflicts at
 integration, resolved by the orchestrator
 (profile/rules/isolated-task-merge.md). Dispatch syntax is one
 task-tool batch, not "multiple dispatch calls in one response".
+Wording is imperative on purpose: isolation is OPT-IN per dispatch
+(`isolated` is a required task-tool field; false = in-tree), and an
+earlier indicative phrasing ("dispatches run isolated") led models to
+assume the harness isolates by default and omit the flag.
 
 What must survive a rebase:
 - Only TRUE dependencies (one agent consumes another's output) justify
   sequencing; file overlap never does.
-- Dispatch example: one task batch, isolated: true per file-editing
-  item.
+- Dispatch example: one task batch shown in REAL parameter shape
+  (JSON items carrying "isolated": true), never prose annotations.
+- Isolation stated as opt-in + required field, imperative mood
+  ("set isolated: true"), with the isolated: false consequence named.
 - Integration step merges parked task refs per the merge rule instead
   of "check for conflicts".
 
 diff --git a/skills/dispatching-parallel-agents/SKILL.md b/skills/dispatching-parallel-agents/SKILL.md
-index 75e7e22..86bc2d6 100644
+index 75e7e22..9263334 100644
 --- a/skills/dispatching-parallel-agents/SKILL.md
 +++ b/skills/dispatching-parallel-agents/SKILL.md
 @@ -20,16 +20,11 @@ digraph when_to_use {
@@ -38,7 +44,7 @@ index 75e7e22..86bc2d6 100644
  }
  ```
  
-@@ -37,12 +32,16 @@ digraph when_to_use {
+@@ -37,12 +32,18 @@ digraph when_to_use {
  - 3+ test files failing with different root causes
  - Multiple subsystems broken independently
  - Each problem can be understood without context from others
@@ -51,33 +57,39 @@ index 75e7e22..86bc2d6 100644
 -- Agents would interfere with each other
 +- One task consumes another's output (a true dependency — dispatch in sequence)
 +
-+File overlap is NOT a reason to serialize: file-editing dispatches run
-+`isolated: true`, and isolated subagents never conflict while running.
-+Overlapping edits surface as merge conflicts you resolve at integration.
++File overlap is NOT a reason to serialize. Isolation is opt-in per dispatch:
++the `isolated` flag is REQUIRED on every `tasks[]` item, and `isolated: false`
++runs the agent DIRECTLY in your worktree. Set `isolated: true` on every
++file-editing item — isolated subagents never conflict while running, and
++overlapping edits surface as merge conflicts you resolve at integration.
  
  ## The Pattern
  
-@@ -65,24 +64,24 @@ Each agent gets:
+@@ -65,24 +66,27 @@ Each agent gets:
  
  ### 3. Dispatch in Parallel
  
 -Issue all three subagent dispatches in the same response — they run in parallel:
-+Dispatch all agents in one `task` batch; file-editing agents get
-+`isolated: true`:
++Dispatch all agents in one `task` batch. `isolated` is a REQUIRED parameter on
++each item — set it to `true` for every file-editing agent (`false` is only for
++read-only work):
  
- ```text
+-```text
 -Subagent (general-purpose): "Fix agent-tool-abort.test.ts failures"
 -Subagent (general-purpose): "Fix batch-completion-behavior.test.ts failures"
 -Subagent (general-purpose): "Fix tool-approval-race-conditions.test.ts failures"
-+task tasks[]:
-+  - "Fix agent-tool-abort.test.ts failures" (isolated: true)
-+  - "Fix batch-completion-behavior.test.ts failures" (isolated: true)
-+  - "Fix tool-approval-race-conditions.test.ts failures" (isolated: true)
- # All three run concurrently.
+-# All three run concurrently.
++```json
++tasks: [
++  {"task": "Fix agent-tool-abort.test.ts failures", "isolated": true},
++  {"task": "Fix batch-completion-behavior.test.ts failures", "isolated": true},
++  {"task": "Fix tool-approval-race-conditions.test.ts failures", "isolated": true}
++]
  ```
  
 -Multiple dispatch calls in one response = parallel execution. One per response = sequential.
--
++All three run concurrently.
+ 
  ### 4. Review and Integrate
  
  When agents return:
@@ -90,7 +102,7 @@ index 75e7e22..86bc2d6 100644
  
  ## Agent Prompt Structure
  
-@@ -131,7 +130,7 @@ Return: Summary of what you found and what you fixed.
+@@ -131,7 +135,7 @@ Return: Summary of what you found and what you fixed.
  **Related failures:** Fixing one might fix others - investigate together first
  **Need full context:** Understanding requires seeing entire system
  **Exploratory debugging:** You don't know what's broken yet
@@ -99,7 +111,7 @@ index 75e7e22..86bc2d6 100644
  
  ## Real Example from Session
  
-@@ -164,14 +163,14 @@ Agent 3 → Fix tool-approval-race-conditions.test.ts
+@@ -164,14 +168,14 @@ Agent 3 → Fix tool-approval-race-conditions.test.ts
  
  1. **Parallelization** - Multiple investigations happen simultaneously
  2. **Focus** - Each agent has narrow scope, less context to track

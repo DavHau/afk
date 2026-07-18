@@ -11,6 +11,10 @@
 # - omp-isolation-auto-apply: adds task.isolation.autoApply (default true);
 #   setting it false keeps isolated changes parked on their task ref so a
 #   merge queue can cherry-pick against a clean tree.
+# - omp-isolation-required-flag: the task tool's `isolated` flag becomes a
+#   REQUIRED wire field whenever isolation is enabled — a dispatch must
+#   choose true/false explicitly, so a forgotten flag is a schema error
+#   instead of a silent non-isolated run in the shared worktree.
 # - omp-vcs-handle-seam: pure refactor extracting isolated-task VCS ops
 #   behind a VcsHandle interface (src/task/vcs.ts). No behavior change.
 # - omp-jj-workspace-handle: JjWorkspaceHandle so isolated subagents work in
@@ -59,6 +63,7 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-vcs-handle-seam.patch
     ../patches/omp/omp-jj-workspace-handle.patch
     ../patches/omp/omp-jj-prompt-instructions.patch
+    ../patches/omp/omp-isolation-required-flag.patch
     ../patches/omp/omp-distro-default-settings.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────

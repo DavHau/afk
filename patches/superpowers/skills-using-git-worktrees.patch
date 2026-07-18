@@ -1,56 +1,46 @@
-afk: isolation is native; this skill must not create anything.
+afk: isolation is one flag away; this skill must not create anything.
 
 Motivation: the harness provides isolation via isolated: true task
 subagents (copy-on-write snapshots + parked task refs). Manual
 `git worktree add` / `jj workspace add` create phantom state the
 harness cannot manage and destabilize the jj-colocated checkout. The
 skill file stays (its frontmatter description still matches trigger
-phrases) but the body is a full replacement redirecting to native
-isolation.
+phrases) but the body is a full replacement redirecting to flag-based
+isolation. The body says explicitly that `isolated` is a REQUIRED,
+non-implicit task-tool parameter — an earlier "isolation is native"
+phrasing led models to assume the harness isolates by default and omit
+the flag.
 
 What must survive a rebase:
 - Body = redirect: NEVER git worktree add / jj workspace add / consent
-  question; wanting isolation = delegating to isolated subagents; a
-  referenced "create an isolated workspace" step counts as satisfied.
+  question; wanting isolation = delegating to subagents dispatched with
+  isolated: true; a referenced "create an isolated workspace" step
+  counts as satisfied.
+- Isolation stated as opt-in: REQUIRED flag, NOT implicit,
+  isolated: false = runs directly in the parent worktree.
 - Keep the pre-dispatch checks (project setup + clean test baseline in
   the main workspace) — the only upstream content worth preserving.
 - Upstream restructures of its Steps 0-3 can be discarded wholesale;
   regenerate this patch as a full-body replacement.
 
 diff --git a/skills/using-git-worktrees/SKILL.md b/skills/using-git-worktrees/SKILL.md
-index 212c569..207e527 100644
+index 212c569..f41a3ac 100644
 --- a/skills/using-git-worktrees/SKILL.md
 +++ b/skills/using-git-worktrees/SKILL.md
-@@ -7,196 +7,39 @@ description: Use when starting feature work that needs isolation from current wo
+@@ -7,196 +7,42 @@ description: Use when starting feature work that needs isolation from current wo
  
  ## Overview
  
 -Ensure work happens in an isolated workspace. Prefer your platform's native worktree tools. Fall back to manual git worktrees only when no native tool is available.
-+On this harness, isolation is native: file-editing subagents dispatched
-+with `isolated: true` each work in their own copy-on-write snapshot and
-+return their changes as parked task refs (see the always-applied
-+`isolated-task-merge` rule). There is nothing to set up.
- 
+-
 -**Core principle:** Detect existing isolation first. Then use native tools. Then fall back to git. Never fight the harness.
-+**Core principle:** Wanting isolation = wanting delegation. Dispatch the
-+work as isolated `task` subagents; the top-level agent works in place.
- 
+-
 -**Announce at start:** "I'm using the using-git-worktrees skill to set up an isolated workspace."
-+**NEVER:**
-+- Run `git worktree add` — manual worktrees create phantom state the
-+  harness can't see or manage.
-+- Run `jj workspace add` — same problem, jj flavor.
-+- Ask the user whether to set up a worktree. The answer is native
-+  isolation, and it needs no consent or setup.
- 
+-
 -## Step 0: Detect Existing Isolation
-+If a skill or plan references this skill "to create an isolated
-+workspace", treat that step as satisfied: execution via isolated
-+subagents already provides it.
- 
+-
 -**Before creating anything, check if you are already in an isolated workspace.**
-+## Pre-Dispatch Checks
- 
+-
 -```bash
 -GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
 -GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
@@ -126,9 +116,7 @@ index 212c569..207e527 100644
 -```bash
 -# Determine path based on chosen location
 -path="$LOCATION/$BRANCH_NAME"
-+Before dispatching the first isolated implementer, verify the baseline in
-+the main workspace:
- 
+-
 -git worktree add "$path" -b "$BRANCH_NAME"
 -cd "$path"
 -```
@@ -166,6 +154,33 @@ index 212c569..207e527 100644
 -**If tests fail:** Report failures, ask whether to proceed or investigate.
 -
 -**If tests pass:** Report ready.
++On this harness, isolation is one flag away — never a worktree: subagents
++dispatched with `isolated: true` each work in their own copy-on-write
++snapshot and return their changes as parked task refs (see the
++always-applied `isolated-task-merge` rule). The flag is a REQUIRED task-tool
++parameter and is NOT implicit — `isolated: false` runs the subagent directly
++in your worktree. There is nothing else to set up.
++
++**Core principle:** Wanting isolation = wanting delegation. Dispatch the
++work as `task` subagents with `isolated: true`; the top-level agent works
++in place.
++
++**NEVER:**
++- Run `git worktree add` — manual worktrees create phantom state the
++  harness can't see or manage.
++- Run `jj workspace add` — same problem, jj flavor.
++- Ask the user whether to set up a worktree. The answer is native
++  isolation, and it needs no consent or setup.
++
++If a skill or plan references this skill "to create an isolated
++workspace", treat that step as satisfied: execution via subagents
++dispatched with `isolated: true` already provides it.
++
++## Pre-Dispatch Checks
++
++Before dispatching the first isolated implementer, verify the baseline in
++the main workspace:
++
 +1. **Project setup:** dependencies installed, build works (`npm install`,
 +   `cargo build`, … as the project demands).
 +2. **Clean test baseline:** run the project's test suite. If tests fail,

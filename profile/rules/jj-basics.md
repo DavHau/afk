@@ -23,6 +23,8 @@ version control; remotes and pushes are plain git under the hood.
 - The jj **op log** (`jj op log`) records every operation and is the substrate
   for recovery — `jj op restore <id>` undoes a bad operation.
 
-**Isolated subagents run no version control.** Harness-isolated `task`
-subagents work in a copy-on-write snapshot; the harness captures their changes
-automatically, so they must never run `jj` or `git` against the repo.
+**Isolated subagents run no version control.** `task` subagents dispatched
+with `isolated: true` work in a copy-on-write snapshot; the harness captures
+their changes, so they must never run `jj` or `git` against the repo. The
+flag is not implicit: a dispatch with `isolated: false` runs directly in the
+parent worktree under the normal jj workflow.
