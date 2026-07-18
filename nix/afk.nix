@@ -8,14 +8,16 @@
   afk-skills,
 }:
 let
-  # Generated config.yml. Short rationale comments only; NO modelRoles (the
+  # Distribution default settings, loaded via $OMP_DISTRO_CONFIG (the
+  # omp-distro-default-settings patch) as a layer BELOW the user's global
+  # config.yml — users override any of this at runtime and their writes
+  # persist normally. Short rationale comments only; NO modelRoles (the
   # user's login/models are their own) and NO personal system-prompt content.
-  configFile = pkgs.writeText "config.yml" ''
+  configFile = pkgs.writeText "distro-config.yml" ''
     startup:
       quiet: true
-      # The onboarding setup wizard bumps setupVersion on completion, but
-      # config.yml is a read-only Nix-store symlink so the write never
-      # persists — it would re-run every launch. Disable it outright.
+      # Skip the onboarding setup wizard by default; the distribution
+      # pre-configures everything the wizard would ask about.
       setupWizard: false
     skills:
       # The full Superpowers library (afk-skills package output is the skills
@@ -63,6 +65,8 @@ let
       # Named profile: omp derives every user-level path (config, rules,
       # extensions, sessions, agent.db) from ~/.omp/profiles/afk/agent.
       OMP_PROFILE = "afk";
+      # Distribution default settings (lowest config layer; see configFile).
+      OMP_DISTRO_CONFIG = "${configFile}";
       # Consumed by the superpowers extension to locate
       # using-superpowers/SKILL.md for the bootstrap injection.
       OMP_SUPERPOWERS_DIR = "${afk-skills}";
@@ -70,7 +74,14 @@ let
     preHook = ''
       config_dir="$HOME/.omp/profiles/afk/agent"
       mkdir -p "$config_dir/rules" "$config_dir/extensions"
-      ln -sf ${configFile} "$config_dir/config.yml"
+      # Migration: earlier afk versions symlinked config.yml into the Nix
+      # store, which silently discarded every runtime settings write (model
+      # selection, /settings). Distribution settings now arrive via
+      # $OMP_DISTRO_CONFIG; drop the stale symlink so omp can create a real,
+      # user-owned config.yml.
+      if [ -L "$config_dir/config.yml" ]; then
+        rm "$config_dir/config.yml"
+      fi
       # The always-applied jj basics rule for the distribution.
       ln -sf ${../profile/rules/jj-basics.md} "$config_dir/rules/jj-basics.md"
       # The always-applied merge protocol for isolated-subagent task refs.

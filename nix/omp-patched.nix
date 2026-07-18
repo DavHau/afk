@@ -19,6 +19,11 @@
 # - omp-jj-prompt-instructions: prompt wording only — hardcoded git
 #   instructions in system/orchestrate/plan-mode/commit-message prompts
 #   mention jj alongside git (`jj st`, git/jj subcommands, `jj describe`).
+# - omp-distro-default-settings: adds a distribution-defaults settings layer
+#   read from $OMP_DISTRO_CONFIG (YAML), merged below the user's global
+#   config.yml — the wrapper ships opinionated defaults without owning the
+#   user's config file, so runtime writes (model selection, /settings)
+#   persist and override.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -31,7 +36,22 @@
 # extensions with runtime @oh-my-pi/* imports, so the bug that patch fixes
 # cannot manifest here. Revisit if an extension with a runtime @oh-my-pi/*
 # import is ever added.
-{ omp }:
+{
+  stdenv,
+  omp,
+  omp-natives,
+}:
+let
+  rustTarget = stdenv.hostPlatform.rust.rustcTarget;
+  # Mirror of upstream's platformsBySystem, restricted to the flake's systems.
+  nativeLibBySystem = {
+    x86_64-linux = "libpi_natives.so";
+    aarch64-linux = "libpi_natives.so";
+  };
+  nativeLib =
+    nativeLibBySystem.${stdenv.hostPlatform.system}
+      or (throw "Unsupported platform for omp-patched: ${stdenv.hostPlatform.system}");
+in
 omp.overrideAttrs (old: {
   patches = (old.patches or [ ]) ++ [
     ../patches/omp/omp-jj-colocated-task-refs.patch
@@ -39,5 +59,45 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-vcs-handle-seam.patch
     ../patches/omp/omp-jj-workspace-handle.patch
     ../patches/omp/omp-jj-prompt-instructions.patch
+    ../patches/omp/omp-distro-default-settings.patch
   ];
+  # ── Prebuilt natives seam ─────────────────────────────────────────────
+  # The pi-natives Rust addon is built once, from UNPATCHED upstream source,
+  # in nix/omp-natives.nix (the patches above are TypeScript-only, so the
+  # artifact is identical across patch iterations). This preBuild neutralizes
+  # upstream's Rust steps without editing its buildPhase text, so an upstream
+  # rebase that reshuffles buildPhase needs no changes here. Four seams, each
+  # aimed at one upstream line:
+  #
+  # 1. Seed packages/natives/native/ from the prebuilt output. Covers the
+  #    napi index.d.ts and the gen-enums index.js (gen-enums writes only
+  #    inside native/). Upstream's gen-enums step still re-runs against the
+  #    seeded files; it is idempotent and cheap, so it is left alone — hence
+  #    --no-preserve=mode, it must be able to rewrite them.
+  # 2. Seed target/<rustTarget>/release/<nativeLib> so upstream's
+  #    `cp target/.../release/... packages/natives/native/*.node` succeeds.
+  # 3. Put a no-op `cargo` shim first on PATH so upstream's
+  #    `cargo build --release -p pi-natives ...` becomes a fast no-op.
+  # 4. Remove node_modules/.bin/napi: upstream guards its napi dts step with
+  #    `[ -x "$napiBin" ]`, and the napi CLI RE-INVOKES cargo (which the shim
+  #    would turn into garbage output); deleting the bin makes upstream skip
+  #    the step. Its outputs are already covered by (1).
+  #
+  # If a future patch ever touches packages/natives/**, the seeding in (1)
+  # would clobber it at build time — such a patch belongs in omp-natives.nix.
+  preBuild = (old.preBuild or "") + ''
+    mkdir -p packages/natives/native
+    cp -r --no-preserve=mode ${omp-natives}/native/. packages/natives/native/
+
+    mkdir -p target/${rustTarget}/release
+    cp --no-preserve=mode ${omp-natives}/lib/${nativeLib} \
+      target/${rustTarget}/release/${nativeLib}
+
+    mkdir -p "$TMPDIR/cargo-shim"
+    printf '#!%s\nexit 0\n' "${stdenv.shell}" > "$TMPDIR/cargo-shim/cargo"
+    chmod +x "$TMPDIR/cargo-shim/cargo"
+    export PATH="$TMPDIR/cargo-shim:$PATH"
+
+    rm -f node_modules/.bin/napi
+  '';
 })

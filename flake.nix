@@ -39,8 +39,12 @@
         system: pkgs:
         let
           afk-skills = pkgs.callPackage ./nix/afk-skills.nix { inherit superpowers; };
+          omp-natives = pkgs.callPackage ./nix/omp-natives.nix {
+            omp = llm-agents.packages.${system}.omp;
+          };
           omp-patched = pkgs.callPackage ./nix/omp-patched.nix {
             omp = llm-agents.packages.${system}.omp;
+            inherit omp-natives;
           };
           afkPkgs = import ./nix/afk.nix {
             inherit pkgs afk-skills omp-patched;
@@ -48,7 +52,7 @@
           };
         in
         {
-          inherit afk-skills omp-patched;
+          inherit afk-skills omp-natives omp-patched;
           inherit (afkPkgs) afk;
           default = afkPkgs.afk;
         }

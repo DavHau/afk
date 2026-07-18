@@ -1,0 +1,94 @@
+afk: distribution default settings via $OMP_DISTRO_CONFIG.
+
+Motivation: the afk wrapper used to symlink the generated distribution
+config.yml into the profile's agent dir. That made the *user's* global
+config a read-only Nix-store symlink, so nothing the user changed at
+runtime (model selection, setup wizard state, any /settings write)
+survived a restart — omp writes runtime settings to the global
+config.yml, and the wrapper clobbered it back on every launch.
+
+This patch adds a distribution-defaults settings layer: when
+$OMP_DISTRO_CONFIG names a YAML settings file, it is loaded into a
+#distro layer merged BELOW the user's global config (and above the
+schema defaults). Precedence becomes:
+
+  schema defaults < distro defaults < global < project < overlays < runtime
+
+so the distribution ships opinionated defaults while every user-level
+write persists normally and overrides them. Loading is lenient
+(#loadYamlIfPresent): a missing or malformed distro file degrades to {}
+with a logged warning instead of bricking the binary.
+
+What must survive a rebase:
+- #distro merged as the LOWEST config layer in #rebuildMerged (user
+  config must always win).
+- Both #load() and #loadReadOnly() populate #distro; cloneForCwd copies
+  it (reloadForCwd only reloads the project layer and re-merges, so it
+  needs no change).
+- The distro file goes through #loadYamlIfPresent and therefore
+  #migrateRawSettings, same as the global config.
+
+diff --git a/packages/coding-agent/src/config/settings.ts b/packages/coding-agent/src/config/settings.ts
+--- a/packages/coding-agent/src/config/settings.ts
++++ b/packages/coding-agent/src/config/settings.ts
+@@ -312,6 +312,8 @@
+ 	#storage: AgentStorage | null = null;
+ 
+ 	#configFiles: string[] = [];
++	/** Distribution defaults from $OMP_DISTRO_CONFIG (below global config, above schema defaults) */
++	#distro: RawSettings = {};
+ 	/** Global settings from config.yml/config.yaml */
+ 	#global: RawSettings = {};
+ 	/** Project settings from .claude/settings.yml etc */
+@@ -565,6 +567,7 @@
+ 		});
+ 		cloned.#storage = this.#storage;
+ 		cloned.#configPath = this.#configPath;
++		cloned.#distro = structuredClone(this.#distro);
+ 		cloned.#global = structuredClone(this.#global);
+ 		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
+ 		cloned.#configFiles = [...this.#configFiles];
+@@ -990,6 +993,7 @@
+ 			await this.#seedLastChangelogVersionMarker();
+ 		}
+ 
++		this.#distro = await this.#loadDistroDefaults();
+ 		this.#project = await projectPromise;
+ 		this.#configOverlay = await this.#loadConfigOverlays();
+ 
+@@ -1007,6 +1011,7 @@
+ 			this.#global = existingConfig;
+ 		}
+ 
++		this.#distro = await this.#loadDistroDefaults();
+ 		this.#project = await projectPromise;
+ 		this.#configOverlay = await this.#loadConfigOverlays();
+ 		this.#rebuildMerged();
+@@ -1083,6 +1088,18 @@
+ 	}
+ 
+ 	/**
++	 * Lenient loader for distribution defaults ($OMP_DISTRO_CONFIG): merged
++	 * below the global config so user settings always win. A missing or
++	 * malformed file degrades to {} with a logged warning, never an error —
++	 * a broken distribution file must not brick the binary.
++	 */
++	async #loadDistroDefaults(): Promise<RawSettings> {
++		const filePath = process.env.OMP_DISTRO_CONFIG?.trim();
++		if (!filePath) return {};
++		return (await this.#loadYamlIfPresent(path.resolve(expandTilde(filePath)))) ?? {};
++	}
++
++	/**
+ 	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
+ 	 * missing or malformed files are hard errors so a typo'd path cannot
+ 	 * silently fall back to the persistent settings.
+@@ -1734,7 +1751,7 @@
+ 	}
+ 
+ 	#rebuildMerged(): void {
+-		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#projectSettingsForMerge());
++		this.#merged = this.#deepMerge(this.#deepMerge(this.#deepMerge({}, this.#distro), this.#global), this.#projectSettingsForMerge());
+ 		this.#merged = this.#deepMerge(this.#merged, this.#configOverlay);
+ 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
+ 		this.#resolvedCache.clear();
