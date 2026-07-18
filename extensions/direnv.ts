@@ -15,6 +15,21 @@
  * the already-running cached shell. Accepted; matches the original's
  * process.env-mutation design.
  *
+ * Isolated subagents: task-isolation runs execute in-process with cwd set
+ * to a copy-on-write clone under `$OMP_WORKTREE_DIR|~/.omp/wt/t<hex9>/m`.
+ * direnv keys its grants on the .envrc path + content, so the clone's
+ * .envrc is never allowed even when the origin's is — and any .envrc edit
+ * inside the clone revokes a grant with no user around to re-approve it.
+ * For such sessions (and only when the shared process env carries direnv
+ * evidence, i.e. the origin environment actually loaded), `direnv allow`
+ * runs before every export: the initial clone gets the origin's grant
+ * mirrored, and subagent .envrc edits are re-granted automatically so the
+ * reload-after-tool behavior matches the main session. The grant is scoped
+ * to the throwaway clone path and adds no capability the subagent's bash
+ * tool doesn't already have. .envrc edits made via the edit/write tools
+ * also trigger a reload (main sessions included; there it surfaces the
+ * usual blocked ✗ until the user re-allows).
+ *
  * Requirements: direnv on PATH, `.envrc` allowed (`direnv allow`).
  * Status bar: "direnv …" (running), "direnv ✓" (loaded), "direnv ✗" (error).
  *
@@ -23,6 +38,8 @@
  */
 
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 export type DirenvState = "loading" | "ok" | "error";
@@ -39,6 +56,18 @@ export interface DirenvLoaderDeps {
 	env: Record<string, string | undefined>;
 	/** Inline wait budget; a run outlasting it finishes in the background. */
 	timeoutMs?: number;
+	/**
+	 * Runs `direnv allow` in `cwd`. Invoked before every export when
+	 * `autoAllow(cwd)` is true; failures (no .envrc, direnv missing) are
+	 * ignored and the export still runs.
+	 */
+	allow?: (cwd: string) => Promise<DirenvRunResult>;
+	/**
+	 * Predicate gating the pre-export `allow` call. Production: cwd is a
+	 * task-isolation worktree clone AND the shared env shows direnv already
+	 * loaded for the origin (DIRENV_DIR set).
+	 */
+	autoAllow?: (cwd: string) => boolean;
 }
 
 /** Structural subset of ExtensionContext the extension touches. */
@@ -56,7 +85,10 @@ export interface DirenvPi {
 	on(event: "session_start", handler: (event: unknown, ctx: DirenvCtx) => void | Promise<void>): void;
 	on(
 		event: "tool_result",
-		handler: (event: { toolName?: string }, ctx: DirenvCtx) => void | Promise<void>,
+		handler: (
+			event: { toolName?: string; input?: Record<string, unknown> },
+			ctx: DirenvCtx,
+		) => void | Promise<void>,
 	): void;
 }
 
@@ -110,6 +142,12 @@ export function createDirenvLoader(deps: DirenvLoaderDeps) {
 	async function runAndApply(cwd: string, onStatus?: (state: DirenvState) => void): Promise<void> {
 		let result: DirenvRunResult;
 		try {
+			// Isolated-clone grant: direnv keys grants on path + content, so the
+			// clone's .envrc (and any later edit to it) is blocked until allowed.
+			// Idempotent and cheap; run unconditionally before the export.
+			if (deps.allow && deps.autoAllow?.(cwd)) {
+				await deps.allow(cwd).catch(() => undefined);
+			}
 			result = await deps.run(cwd);
 		} catch {
 			onStatus?.("error");
@@ -147,7 +185,14 @@ function themedStatus(ctx: DirenvCtx, state: DirenvState): string {
 	}
 }
 
-/** Wire the loader to session_start and bash tool_result events. */
+/** True when the tool_result event is an edit/write that touched a `.envrc`. */
+export function isEnvrcMutation(event: { toolName?: string; input?: Record<string, unknown> }): boolean {
+	if (event.toolName !== "edit" && event.toolName !== "write") return false;
+	const target = event.input?.path;
+	return typeof target === "string" && path.basename(target) === ".envrc";
+}
+
+/** Wire the loader to session_start, bash, and .envrc edit/write tool results. */
 export function createDirenvExtension(pi: DirenvPi, deps: DirenvLoaderDeps): void {
 	const loader = createDirenvLoader(deps);
 
@@ -159,16 +204,49 @@ export function createDirenvExtension(pi: DirenvPi, deps: DirenvLoaderDeps): voi
 	pi.on("session_start", (_event, ctx) => loader.load(ctx.cwd, statusFor(ctx)));
 
 	// Re-run after every bash command to pick up .envrc changes
-	// (cd to a new dir, git checkout, direnv allow, ...).
+	// (cd to a new dir, git checkout, direnv allow, ...), and after
+	// edit/write tool calls that touched a .envrc directly — the usual
+	// way an agent (especially an isolated subagent) modifies it.
 	pi.on("tool_result", (event, ctx) => {
-		if (event.toolName !== "bash") return;
+		if (event.toolName !== "bash" && !isEnvrcMutation(event)) return;
 		return loader.load(ctx.cwd, statusFor(ctx));
 	});
 }
 
-function spawnDirenv(cwd: string): Promise<DirenvRunResult> {
+/**
+ * True when `cwd` sits inside an omp task-isolation worktree clone:
+ * `<worktreesDir>/t<9 hex>/<m|merged>[/...]`. Mirrors the layout in
+ * omp's task/worktree.ts (TASK_ISOLATION_DIR_PREFIX/-MOUNT_DIR) and
+ * cli/worktree-cli.ts (mount dir "m" or "merged").
+ */
+export function isTaskIsolationWorktree(cwd: string, worktreesDir = defaultWorktreesDir()): boolean {
+	const rel = path.relative(path.resolve(worktreesDir), path.resolve(cwd));
+	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+	const [segment, mount] = rel.split(path.sep);
+	if (!segment || !/^t[0-9a-f]{9}$/.test(segment)) return false;
+	return mount === "m" || mount === "merged";
+}
+
+/**
+ * omp's agent-managed worktree base: `$OMP_WORKTREE_DIR` (absolute, `~`
+ * expanded) falling back to `~/.omp/wt`. Replicated from pi-utils
+ * getWorktreesDir() because extensions in this build must not import
+ * `@oh-my-pi/*` at runtime (see nix/omp-patched.nix on the omitted
+ * bundled-virtual-modules patch). The `worktree.base` setting override is
+ * not visible here; afk does not set it.
+ */
+function defaultWorktreesDir(): string {
+	const fromEnv = process.env.OMP_WORKTREE_DIR;
+	if (fromEnv) {
+		const expanded = fromEnv === "~" || fromEnv.startsWith("~/") ? path.join(homedir(), fromEnv.slice(1)) : fromEnv;
+		if (path.isAbsolute(expanded)) return expanded;
+	}
+	return path.join(homedir(), ".omp", "wt");
+}
+
+function spawnDirenvProcess(cwd: string, args: string[]): Promise<DirenvRunResult> {
 	const { promise, resolve } = Promise.withResolvers<DirenvRunResult>();
-	const proc = spawn("direnv", ["export", "json"], {
+	const proc = spawn("direnv", args, {
 		cwd,
 		stdio: ["ignore", "pipe", "ignore"],
 	});
@@ -185,5 +263,14 @@ export default function (pi: ExtensionAPI) {
 	// Cast: DirenvPi narrows ExtensionAPI's ThemeColor-typed theme.fg to plain
 	// strings for testability; the runtime object satisfies both shapes.
 	const direnvPi = pi as unknown as DirenvPi;
-	createDirenvExtension(direnvPi, { env: process.env, run: spawnDirenv });
+	createDirenvExtension(direnvPi, {
+		env: process.env,
+		run: cwd => spawnDirenvProcess(cwd, ["export", "json"]),
+		allow: cwd => spawnDirenvProcess(cwd, ["allow"]),
+		// Auto-allow only inside task-isolation clones, and only when direnv
+		// evidence exists in the (process-wide, shared) env — DIRENV_DIR is
+		// set iff an origin .envrc was allowed and actually loaded, either by
+		// the main session's extension instance or by the launching shell.
+		autoAllow: cwd => isTaskIsolationWorktree(cwd) && Boolean(process.env.DIRENV_DIR),
+	});
 }

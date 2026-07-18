@@ -13,6 +13,7 @@ import {
 	type DirenvPi,
 	type DirenvRunResult,
 	type DirenvState,
+	isTaskIsolationWorktree,
 } from "./direnv";
 
 describe("applyDirenvExport", () => {
@@ -37,6 +38,28 @@ describe("applyDirenvExport", () => {
 		const env: Record<string, string | undefined> = { KEEP: "1" };
 		expect(applyDirenvExport("{not json", env)).toEqual({ ok: false, loaded: 0, unset: 0 });
 		expect(env).toEqual({ KEEP: "1" });
+	});
+});
+
+describe("isTaskIsolationWorktree", () => {
+	const base = "/home/u/.omp/wt";
+
+	it("matches <base>/t<9hex>/m and subpaths, plus the legacy 'merged' mount", () => {
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/m", base)).toBe(true);
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/m/sub/dir", base)).toBe(true);
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/merged", base)).toBe(true);
+	});
+
+	it("rejects paths outside the base, the base itself, and non-isolation segments", () => {
+		expect(isTaskIsolationWorktree("/proj", base)).toBe(false);
+		expect(isTaskIsolationWorktree(base, base)).toBe(false);
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde", base)).toBe(false);
+		// gh PR checkout segment (not t<9hex>) and wrong mount dir
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/123-abcdef/m", base)).toBe(false);
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcde/other", base)).toBe(false);
+		// digest must be exactly 9 hex chars
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcd/m", base)).toBe(false);
+		expect(isTaskIsolationWorktree("/home/u/.omp/wt/t0123abcdef/m", base)).toBe(false);
 	});
 });
 
@@ -153,6 +176,55 @@ describe("createDirenvLoader", () => {
 		gates[1].resolve({ code: 0, stdout: "{}" });
 		await second;
 	});
+
+	it("runs allow before the export when autoAllow returns true", async () => {
+		const order: string[] = [];
+		const env: Record<string, string | undefined> = {};
+		const loader = createDirenvLoader({
+			env,
+			run: async cwd => {
+				order.push(`run:${cwd}`);
+				return { code: 0, stdout: JSON.stringify({ FOO: "bar" }) };
+			},
+			allow: async cwd => {
+				order.push(`allow:${cwd}`);
+				return { code: 0, stdout: "" };
+			},
+			autoAllow: cwd => cwd === "/wt/t0123abcde/m",
+		});
+		await loader.load("/wt/t0123abcde/m");
+		expect(order).toEqual(["allow:/wt/t0123abcde/m", "run:/wt/t0123abcde/m"]);
+		expect(env.FOO).toBe("bar");
+	});
+
+	it("skips allow when autoAllow returns false or is absent", async () => {
+		const order: string[] = [];
+		const allow = async (cwd: string) => {
+			order.push(`allow:${cwd}`);
+			return { code: 0, stdout: "" };
+		};
+		const run = async (cwd: string) => {
+			order.push(`run:${cwd}`);
+			return { code: 0, stdout: "{}" };
+		};
+		await createDirenvLoader({ env: {}, run, allow, autoAllow: () => false }).load("/proj");
+		await createDirenvLoader({ env: {}, run, allow }).load("/proj");
+		expect(order).toEqual(["run:/proj", "run:/proj"]);
+	});
+
+	it("still exports when allow rejects or fails", async () => {
+		const env: Record<string, string | undefined> = {};
+		const statuses: DirenvState[] = [];
+		const loader = createDirenvLoader({
+			env,
+			run: async () => ({ code: 0, stdout: JSON.stringify({ FOO: "bar" }) }),
+			allow: () => Promise.reject(new Error("no .envrc found")),
+			autoAllow: () => true,
+		});
+		await loader.load("/wt", state => statuses.push(state));
+		expect(statuses).toEqual(["loading", "ok"]);
+		expect(env.FOO).toBe("bar");
+	});
 });
 
 interface FakeCtx {
@@ -222,7 +294,7 @@ describe("createDirenvExtension", () => {
 		expect(env.FOO).toBe("bar");
 	});
 
-	it("ignores tool_result events for non-bash tools", async () => {
+	it("ignores tool_result events for non-bash tools and edits of other files", async () => {
 		const { pi, events } = makePi();
 		const calls: string[] = [];
 		createDirenvExtension(pi, {
@@ -234,8 +306,25 @@ describe("createDirenvExtension", () => {
 		});
 		const { ctx } = makeCtx();
 		await emit(events, "tool_result", { toolName: "read" }, ctx);
-		await Bun.sleep(0);
+		await emit(events, "tool_result", { toolName: "edit", input: { path: "/proj/src/main.ts" } }, ctx);
+		await emit(events, "tool_result", { toolName: "write", input: {} }, ctx);
 		expect(calls).toEqual([]);
+	});
+
+	it("reloads direnv after an edit or write tool_result that touched a .envrc", async () => {
+		const { pi, events } = makePi();
+		const calls: string[] = [];
+		createDirenvExtension(pi, {
+			env: {},
+			run: async cwd => {
+				calls.push(cwd);
+				return { code: 0, stdout: "{}" };
+			},
+		});
+		const { ctx } = makeCtx();
+		await emit(events, "tool_result", { toolName: "edit", input: { path: "/proj/.envrc" } }, ctx);
+		await emit(events, "tool_result", { toolName: "write", input: { path: ".envrc" } }, ctx);
+		expect(calls).toEqual(["/proj", "/proj"]);
 	});
 
 	it("reloads direnv after a bash tool_result", async () => {
