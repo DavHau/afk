@@ -10,21 +10,24 @@ What must survive a rebase:
   cleanup go through a VcsHandle so a jj implementation can slot in.
   If upstream refactors these functions, re-cut the seam at the
   equivalent points; behavior must remain byte-identical for git repos.
+  Since 17.0.4 the merge/nested-patch call sites live in
+  structured-subagent.ts (runStructuredSubagent), not task/index.ts or
+  eval/agent-bridge.ts.
 - Apply order: this patch precedes omp-jj-workspace-handle.patch.
 
 diff --git a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
-index ef11527..f954351 100644
+index 79954f8..d01261c 100644
 --- a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
 +++ b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
 @@ -14,6 +14,7 @@ import * as taskExecutor from "../../task/executor";
  import * as isolationRunner from "../../task/isolation-runner";
  import { AgentOutputManager } from "../../task/output-manager";
- import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
+ import type { AgentDefinition, AgentProgress, SingleResult, StructuredSubagentOutput } from "../../task/types";
 +import { GitCheckoutHandle } from "../../task/vcs";
  import type { ToolSession } from "../../tools";
- import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
+ import { runEvalAgent } from "../agent-bridge";
  import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
-@@ -926,6 +927,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1012,6 +1013,7 @@ describe("runEvalAgent isolation", () => {
  	function mockIsolationContext(): { repoRoot: string } {
  		const repoRoot = "/repo-root";
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
@@ -32,7 +35,7 @@ index ef11527..f954351 100644
  			repoRoot,
  			baseline: {
  				root: { repoRoot, headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" },
-@@ -1067,6 +1069,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1153,6 +1155,7 @@ describe("runEvalAgent isolation", () => {
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
  			ops.push("prepare");
  			return {
@@ -40,55 +43,6 @@ index ef11527..f954351 100644
  				repoRoot: "/repo-root",
  				baseline: {
  					root: {
-diff --git a/packages/coding-agent/src/eval/agent-bridge.ts b/packages/coding-agent/src/eval/agent-bridge.ts
-index 12eba6b..b00cb8a 100644
---- a/packages/coding-agent/src/eval/agent-bridge.ts
-+++ b/packages/coding-agent/src/eval/agent-bridge.ts
-@@ -513,7 +513,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
- 				if (applyChanges) {
- 					const outcome = await mergeIsolatedChanges({
- 						result,
--						repoRoot: isolationContext.repoRoot,
-+						vcs: isolationContext.vcs,
- 						mergeMode,
- 					});
- 					mergeSummary = outcome.summary;
-@@ -528,7 +528,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
- 
- 					const nestedSummary = await applyEligibleNestedPatches({
- 						result,
--						repoRoot: isolationContext.repoRoot,
-+						vcs: isolationContext.vcs,
- 						mergeMode,
- 						changesApplied: outcome.changesApplied,
- 						mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
-diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
-index 68938ab..3351247 100644
---- a/packages/coding-agent/src/task/index.ts
-+++ b/packages/coding-agent/src/task/index.ts
-@@ -1534,18 +1534,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 				if (result.nestedPatches?.length) {
- 					mergeSummary += ` ${result.nestedPatches.length} nested repository patch(es) captured but not applied.`;
- 				}
--			} else if (isIsolated && repoRoot) {
--				const outcome = await mergeIsolatedChanges({ result, repoRoot, mergeMode });
-+			} else if (isIsolated && isolationContext) {
-+				const outcome = await mergeIsolatedChanges({ result, vcs: isolationContext.vcs, mergeMode });
- 				mergeSummary = outcome.summary;
- 				changesApplied = outcome.changesApplied;
- 				mergedBranchForNestedPatches = outcome.mergedBranchForNestedPatches;
- 			}
- 
- 			// Apply nested repo patches (separate from parent git).
--			if (isIsolated && repoRoot && !autoApplySkipped) {
-+			if (isIsolated && isolationContext && !autoApplySkipped) {
- 				mergeSummary += await applyEligibleNestedPatches({
- 					result,
--					repoRoot,
-+					vcs: isolationContext.vcs,
- 					mergeMode,
- 					changesApplied,
- 					mergedBranchForNestedPatches,
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
 index 781ea64..da211e3 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
@@ -278,6 +232,28 @@ index 781ea64..da211e3 100644
  		if (warnings.length === 0) return "";
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch {
+diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
+index 1685aac..be9360d 100644
+--- a/packages/coding-agent/src/task/structured-subagent.ts
++++ b/packages/coding-agent/src/task/structured-subagent.ts
+@@ -580,7 +580,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+ 		) {
+ 			const outcome = await mergeIsolatedChanges({
+ 				result,
+-				repoRoot: isolationContext.repoRoot,
++				vcs: isolationContext.vcs,
+ 				mergeMode: policy.mergeMode,
+ 			});
+ 			mergeSummary = outcome.summary;
+@@ -588,7 +588,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+ 			if (outcome.changesApplied !== false) {
+ 				const nestedPatchSummary = await applyEligibleNestedPatches({
+ 					result,
+-					repoRoot: isolationContext.repoRoot,
++					vcs: isolationContext.vcs,
+ 					mergeMode: policy.mergeMode,
+ 					changesApplied: outcome.changesApplied,
+ 					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
 diff --git a/packages/coding-agent/src/task/vcs.ts b/packages/coding-agent/src/task/vcs.ts
 new file mode 100644
 index 0000000..d1949eb

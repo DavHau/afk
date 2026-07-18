@@ -1,5 +1,7 @@
 # omp-patched: omp from llm-agents + the jj-relevant patch set. Originally
-# vendored from hyperconfig, rebased onto omp 17.0.0 in patches/omp/. Only
+# vendored from hyperconfig, rebased onto omp 17.0.0, re-rebased onto 17.0.4
+# (isolation orchestration moved into task/structured-subagent.ts) in
+# patches/omp/. Only
 # the jj patches ship here; personal patches (account/statusline/output-crop)
 # stay out.
 #
@@ -18,7 +20,7 @@
 #   instructions in system/orchestrate/plan-mode/commit-message prompts
 #   mention jj alongside git (`jj st`, git/jj subcommands, `jj describe`).
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
-# incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.0).
+# incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
 # (BUNDLED_PI_REGISTRY_KEYS, TYPEBOX_BUNDLED_REGISTRY_KEY,
 # bundledRegistryVirtualSpecifier); the bundled-module key registry moved from a

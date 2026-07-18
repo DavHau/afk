@@ -10,18 +10,21 @@ orchestrator cherry-picks against a clean tree (mirrors eval
 agent(apply=false)).
 
 What must survive a rebase:
-- The setting (settings-schema) and the executor short-circuit: when
-  isolated && !autoApply, skip mergeIsolatedChanges, keep the ref/patch,
-  and append the "changes captured on branch `omp/task/<id>` ... Not
-  merged." notice to the task result text — the distribution's merge
-  rule tells agents to read the ref name from that notice.
-- eval agent()'s explicit apply= argument still overrides per call.
+- The setting (settings-schema) and the default: the shared subagent
+  policy (structured-subagent.ts resolveEffectiveSubagentPolicy) derives
+  applyChanges from `isolation.apply ?? task.isolation.autoApply`. Since
+  17.0.4 upstream's own applyChanges=false path parks the ref/patch and
+  appends the "changes captured on branch `omp/task/<id>` ... Not
+  merged." notice — the distribution's merge rule reads the ref name
+  from that notice, so that wording contract must hold.
+- eval agent()'s explicit apply= argument still overrides per call
+  (agent-bridge only forwards `apply` when explicitly given).
 
 diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
-index fd8e601..e1ba27a 100644
+index 23b0e68..a26c943 100644
 --- a/packages/coding-agent/src/config/settings-schema.ts
 +++ b/packages/coding-agent/src/config/settings-schema.ts
-@@ -4074,6 +4074,18 @@ export const SETTINGS_SCHEMA = {
+@@ -4100,6 +4100,18 @@ export const SETTINGS_SCHEMA = {
  		},
  	},
  
@@ -41,10 +44,10 @@ index fd8e601..e1ba27a 100644
  		type: "enum",
  		values: ["generic", "ai"] as const,
 diff --git a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
-index 8084298..ef11527 100644
+index 5b45fe1..79954f8 100644
 --- a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
 +++ b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
-@@ -1315,6 +1315,52 @@ describe("runEvalAgent isolation", () => {
+@@ -1401,6 +1401,52 @@ describe("runEvalAgent isolation", () => {
  		expect(result.text).toContain("apply=false");
  	});
  
@@ -97,69 +100,16 @@ index 8084298..ef11527 100644
  	it("surfaces a captured branch name when apply=false and the run used branch mode", async () => {
  		mockAgents();
  		mockIsolationContext();
-diff --git a/packages/coding-agent/src/eval/agent-bridge.ts b/packages/coding-agent/src/eval/agent-bridge.ts
-index 8f07607..12eba6b 100644
---- a/packages/coding-agent/src/eval/agent-bridge.ts
-+++ b/packages/coding-agent/src/eval/agent-bridge.ts
-@@ -376,7 +376,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
- 	const isIsolated = parsed.isolated === true;
- 	const settingsMergeMode = options.session.settings.get("task.isolation.merge");
- 	const mergeMode: "patch" | "branch" = parsed.merge === false ? "patch" : settingsMergeMode;
--	const applyChanges = parsed.apply !== false;
-+	const applyChanges = parsed.apply ?? options.session.settings.get("task.isolation.autoApply");
- 
- 	// Isolation context capture (prepareIsolationContext → captureBaseline)
- 	// happens inside the timeout-pause closure below; on dirty/large repos the
-diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
-index 2e787c2..68938ab 100644
---- a/packages/coding-agent/src/task/index.ts
-+++ b/packages/coding-agent/src/task/index.ts
-@@ -1518,7 +1518,23 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 			let mergeSummary = "";
- 			let changesApplied: boolean | null = null;
- 			let mergedBranchForNestedPatches = false;
--			if (isIsolated && repoRoot) {
-+			const autoApply = this.session.settings.get("task.isolation.autoApply");
-+			let autoApplySkipped = false;
-+			if (isIsolated && repoRoot && !autoApply) {
-+				// Orchestrator-driven merge: leave captured changes parked and only
-+				// announce where they live. Mirrors eval agent(apply=false).
-+				autoApplySkipped = true;
-+				if (result.branchName) {
-+					mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (task.isolation.autoApply=false). Not merged.`;
-+				} else if (result.patchPath) {
-+					mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (task.isolation.autoApply=false). Not applied.`;
-+				} else {
-+					mergeSummary = "\n\nIsolation: no changes captured.";
-+				}
-+				if (result.nestedPatches?.length) {
-+					mergeSummary += ` ${result.nestedPatches.length} nested repository patch(es) captured but not applied.`;
-+				}
-+			} else if (isIsolated && repoRoot) {
- 				const outcome = await mergeIsolatedChanges({ result, repoRoot, mergeMode });
- 				mergeSummary = outcome.summary;
- 				changesApplied = outcome.changesApplied;
-@@ -1526,7 +1542,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 			}
- 
- 			// Apply nested repo patches (separate from parent git).
--			if (isIsolated && repoRoot) {
-+			if (isIsolated && repoRoot && !autoApplySkipped) {
- 				mergeSummary += await applyEligibleNestedPatches({
- 					result,
- 					repoRoot,
-@@ -1537,9 +1553,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 				});
- 			}
- 
--			// Cleanup temp directory if used
-+			// Cleanup temp directory if used. Keep it when auto-apply was skipped:
-+			// a patch-mode `result.patchPath` lives inside it and the orchestrator
-+			// consumes it out of band.
- 			const shouldCleanupTempArtifacts =
--				tempArtifactsDir && (!isIsolated || changesApplied === true || changesApplied === null);
-+				tempArtifactsDir &&
-+				(!isIsolated || changesApplied === true || (changesApplied === null && !autoApplySkipped));
- 			if (shouldCleanupTempArtifacts) {
- 				await fs.rm(tempArtifactsDir, { recursive: true, force: true });
- 			}
+diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
+index e8a18ea..1685aac 100644
+--- a/packages/coding-agent/src/task/structured-subagent.ts
++++ b/packages/coding-agent/src/task/structured-subagent.ts
+@@ -300,7 +300,7 @@ export async function resolveEffectiveSubagentPolicy(
+ 		planMode,
+ 		isIsolated,
+ 		mergeMode: request.isolation?.merge ?? request.session.settings.get("task.isolation.merge"),
+-		applyChanges: request.isolation?.apply !== false,
++		applyChanges: request.isolation?.apply ?? request.session.settings.get("task.isolation.autoApply"),
+ 		enableLsp:
+ 			!planMode &&
+ 			(request.enableLsp ?? ((request.session.enableLsp ?? true) && request.session.settings.get("task.enableLsp"))),

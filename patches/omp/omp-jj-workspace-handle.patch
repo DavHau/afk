@@ -17,7 +17,7 @@ What must survive a rebase:
   parked; nested git repos under a jj workspace are not captured.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 1956bf9..4604837 100644
+index 4169891..e539020 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -106,6 +106,7 @@ Artifacts and side channels:
@@ -28,32 +28,6 @@ index 1956bf9..4604837 100644
  - Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command).
  - Agent source precedence: project custom agents, then user custom agents, then bundled agents (`scout`, `designer`, `reviewer`, `task`, `sonic`, `librarian`).
  
-diff --git a/packages/coding-agent/src/eval/agent-bridge.ts b/packages/coding-agent/src/eval/agent-bridge.ts
-index b00cb8a..e5e63d4 100644
---- a/packages/coding-agent/src/eval/agent-bridge.ts
-+++ b/packages/coding-agent/src/eval/agent-bridge.ts
-@@ -458,7 +458,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
- 					isolationContext = await prepareIsolationContext(options.session.cwd);
- 				} catch (err) {
- 					const message = err instanceof Error ? err.message : String(err);
--					throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
-+					throw new ToolError(`Isolated agent() execution requires a version-controlled workspace (git checkout or git-backed jj). ${message}`);
- 				}
- 			}
- 			const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
-diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
-index 3351247..185b7c3 100644
---- a/packages/coding-agent/src/task/index.ts
-+++ b/packages/coding-agent/src/task/index.ts
-@@ -1292,7 +1292,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 			} catch (err) {
- 				const message = err instanceof Error ? err.message : String(err);
- 				return {
--					content: [{ type: "text", text: `Isolated task execution requires a git repository. ${message}` }],
-+					content: [{ type: "text", text: `Isolated task execution requires a version-controlled workspace (git checkout or git-backed jj). ${message}` }],
- 					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
- 				};
- 			}
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
 index da211e3..2184515 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
@@ -74,6 +48,19 @@ index da211e3..2184515 100644
  		if (opts.mergeMode === "branch" && result.exitCode === 0) {
  			try {
  				const commitResult = await vcs.commitToTaskRef(
+diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
+index be9360d..6302e73 100644
+--- a/packages/coding-agent/src/task/structured-subagent.ts
++++ b/packages/coding-agent/src/task/structured-subagent.ts
+@@ -546,7 +546,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+ 				const message = error instanceof Error ? error.message : String(error);
+ 				throw new StructuredSubagentError(
+ 					"isolation",
+-					`Isolated subagent execution requires a git repository. ${message}`,
++					`Isolated subagent execution requires a version-controlled workspace (git checkout or git-backed jj). ${message}`,
+ 					{ cause: error },
+ 				);
+ 			}
 diff --git a/packages/coding-agent/src/task/vcs-jj.ts b/packages/coding-agent/src/task/vcs-jj.ts
 new file mode 100644
 index 0000000..d839f86
@@ -633,6 +620,19 @@ index b214fea..e9f5c3c 100644
 +		expect(log).toContain("omp task JjE2E");
 +	});
 +});
+diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
+index fc28abf..1888703 100644
+--- a/packages/coding-agent/test/task/structured-subagent.test.ts
++++ b/packages/coding-agent/test/task/structured-subagent.test.ts
+@@ -260,7 +260,7 @@ describe("structured subagent primitive", () => {
+ 			runStructuredSubagent(
+ 				request({ session: session({ isolationMode: "worktree" }), isolation: { requested: true } }),
+ 			),
+-		).rejects.toThrow("Isolated subagent execution requires a git repository");
++		).rejects.toThrow("Isolated subagent execution requires a version-controlled workspace");
+ 		expect(artifactsDirsFromRegistry()).toEqual([]);
+ 	});
+ 
 diff --git a/packages/coding-agent/test/task/vcs.test.ts b/packages/coding-agent/test/task/vcs.test.ts
 index 0760f0e..bfdbf9e 100644
 --- a/packages/coding-agent/test/task/vcs.test.ts
