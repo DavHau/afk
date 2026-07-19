@@ -8,9 +8,9 @@
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
 #   a transient branch's post-merge deletion made jj orphan the parent stack.
-# - omp-isolation-auto-apply: adds task.isolation.autoApply (default true);
-#   setting it false keeps isolated changes parked on their task ref so a
-#   merge queue can cherry-pick against a clean tree.
+# - (dropped 17.1.3) omp-isolation-auto-apply: upstream now ships
+#   task.isolation.apply (default true) with identical semantics — the
+#   distro config sets it false (see afk.nix).
 # - omp-isolation-required-flag: the task tool's `isolated` flag becomes a
 #   REQUIRED wire field whenever isolation is enabled — a dispatch must
 #   choose true/false explicitly, so a forgotten flag is a schema error
@@ -28,6 +28,13 @@
 #   config.yml — the wrapper ships opinionated defaults without owning the
 #   user's config file, so runtime writes (model selection, /settings)
 #   persist and override.
+# - omp-yield-array-sections: the yield tool's parameter schema
+#   (withSectionVariants) advertises the whole array branch for array-valued
+#   sections like `findings`, but the per-section validator only accepted a
+#   single element and assembly would nest a submitted array one level deep —
+#   every reviewer that batched findings burned schema-retry round trips.
+#   Array payloads for array-valued sections now validate against the
+#   property schema and splat into the section; the tool description says so.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -59,11 +66,11 @@ in
 omp.overrideAttrs (old: {
   patches = (old.patches or [ ]) ++ [
     ../patches/omp/omp-jj-colocated-task-refs.patch
-    ../patches/omp/omp-isolation-auto-apply.patch
     ../patches/omp/omp-vcs-handle-seam.patch
     ../patches/omp/omp-jj-workspace-handle.patch
     ../patches/omp/omp-jj-prompt-instructions.patch
     ../patches/omp/omp-isolation-required-flag.patch
+    ../patches/omp/omp-yield-array-sections.patch
     ../patches/omp/omp-distro-default-settings.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────

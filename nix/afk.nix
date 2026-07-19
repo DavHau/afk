@@ -30,11 +30,12 @@ let
         # overlayfs: read-only lower layer + copy-up on write, in-process so
         # it works inside the sandbox namespace. merge: branch parks each
         # subagent's commits on refs/omp/task/<id> (the jj-colocated patch).
-        # autoApply: false so the top-level agent cherry-picks against a
-        # clean worktree instead of the harness racing concurrent edits.
+        # apply: false (upstream task.isolation.apply since 17.1.x; replaces
+        # the patched autoApply) so the top-level agent cherry-picks against
+        # a clean worktree instead of the harness racing concurrent edits.
         mode: overlayfs
         merge: branch
-        autoApply: false
+        apply: false
     bash:
       autoBackground:
         # Auto-convert any non-PTY command still running after 10s into a

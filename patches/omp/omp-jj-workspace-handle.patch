@@ -474,7 +474,7 @@ diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/
 index 0359a2d..d48cec1 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -408,12 +408,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
+@@ -418,12 +418,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
  	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
  }
  
@@ -490,9 +490,9 @@ index 0359a2d..d48cec1 100644
  	preferred?: IsoBackendKind,
  ): Promise<IsolationHandle> {
 -	const repoRoot = await getRepoRoot(baseCwd);
+ 	const repository = await git.repo.resolve(repoRoot);
+ 	const sourceCommonDir = repository?.commonDir ?? path.join(repoRoot, ".git");
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
- 	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
- 	const resolution = natives.isoResolve(preferred ?? null);
 diff --git a/packages/coding-agent/src/utils/jj.ts b/packages/coding-agent/src/utils/jj.ts
 index 655decf..0bf825e 100644
 --- a/packages/coding-agent/src/utils/jj.ts
