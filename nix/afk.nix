@@ -90,6 +90,10 @@ let
       ln -sf ${../extensions/superpowers.ts} "$config_dir/extensions/superpowers.ts"
       # direnv auto-load: applies `direnv export json` to the agent process.
       ln -sf ${../extensions/direnv.ts} "$config_dir/extensions/direnv.ts"
+      # isolation-guard: blocks isolated subagents from editing or running
+      # builds in the original checkout via absolute paths (isolation is a
+      # snapshot, not a jail).
+      ln -sf ${../extensions/isolation-guard.ts} "$config_dir/extensions/isolation-guard.ts"
     '';
   };
 in

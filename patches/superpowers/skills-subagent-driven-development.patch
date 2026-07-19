@@ -1,6 +1,6 @@
 afk: rewrite subagent-driven-development for native isolated-subagent
-parallelism. (Also touches implementer-prompt.md and
-task-reviewer-prompt.md.)
+parallelism. (Also touches implementer-prompt.md, task-reviewer-prompt.md,
+and scripts/task-brief.)
 
 Motivation: upstream assumes subagents share the working tree, so it
 serializes tasks ("Never: Dispatch multiple implementation subagents in
@@ -27,6 +27,19 @@ What must survive a rebase:
 - `isolated: true` stated as an explicit REQUIRED task-tool parameter
   on every implementer item (wave-scheduling bullet + implementer
   template field), never as an implicit property of the harness.
+- File Handoffs are isolation-safe: briefs referenced by REPO-RELATIVE
+  path (scripts/task-brief prints the relative form), reports at
+  `local://task-N-report.md` (the parent-shared local:// root), and an
+  explicit ban on absolute filesystem paths in dispatch prompts.
+  Rationale: absolute parent paths in dispatches steered real
+  implementers into reading/editing the SHARED checkout (isolation
+  bypassed, ref empty, worktree dirtied — 2026-07-18 VibePN sessions);
+  and the sdd workspace is self-gitignored, so an in-snapshot report
+  would never reach the parked ref.
+- Implementer template: "Work from: [directory]" dropped on purpose (it
+  invited parent-tree paths); the template states the cwd IS the project
+  root, forbids absolute paths into the original checkout, and names
+  [REPORT_URI] (local://) as the only non-relative write target.
 - Verdict policy: approved -> merge; fixable findings -> merge, then fix
   subagent on the merged state; fundamentally wrong -> delete the ref
   unmerged, re-dispatch the implementer with the findings.
@@ -39,7 +52,7 @@ What must survive a rebase:
   bullet (isolation comes from the isolated flag, not a worktree).
 
 diff --git a/skills/subagent-driven-development/SKILL.md b/skills/subagent-driven-development/SKILL.md
-index d8ca081..6fccf1e 100644
+index d8ca081..cd98a27 100644
 --- a/skills/subagent-driven-development/SKILL.md
 +++ b/skills/subagent-driven-development/SKILL.md
 @@ -5,11 +5,11 @@ description: Use when executing implementation plans with independent tasks in t
@@ -253,16 +266,69 @@ index d8ca081..6fccf1e 100644
  - A dispatch prompt describes one task, not the session's history. Do not
    paste accumulated prior-task summaries ("state after Tasks 1-3") into
    later dispatches — a real session's dispatch hit 42k chars of which 99%
-@@ -236,7 +265,7 @@ and is re-read on every later turn. Hand artifacts over as files:
- - **Report file:** name the implementer's report file after the brief
-   (brief `…/task-N-brief.md` → report `…/task-N-report.md`) and put it in
-   the dispatch prompt. The implementer writes the full report there and
+@@ -220,28 +249,43 @@ final whole-branch review. When you fill a reviewer template:
+ 
+ Everything you paste into a dispatch prompt — and everything a subagent
+ prints back — stays resident in your context for the rest of the session
+-and is re-read on every later turn. Hand artifacts over as files:
++and is re-read on every later turn. Hand artifacts over as files.
++
++Isolated implementers run in a copy-on-write snapshot of your repo. Any
++absolute path into your checkout that appears in a dispatch prompt steers
++the implementer back into the SHARED tree — it will read, edit, and build
++there, bypassing isolation entirely: its parked ref comes back empty
++while your worktree silently accumulates its changes. Hand over repo
++files by REPO-RELATIVE path only (the snapshot contains them at the same
++relative paths), and out-of-repo artifacts as `local://` URIs (session
++scratch space shared with every subagent). Never paste an absolute
++filesystem path into a dispatch prompt.
+ 
+ - **Task brief:** before dispatching an implementer, run this skill's
+   `scripts/task-brief PLAN_FILE N` — it extracts the task's full text to a
+-  uniquely named file and prints the path. Compose the dispatch so the
+-  brief stays the single source of requirements. Your dispatch should
+-  contain: (1) one line on where this task fits in the project; (2) the
+-  brief path, introduced as "read this first — it is your requirements,
+-  with the exact values to use verbatim"; (3) interfaces and decisions
+-  from earlier tasks that the brief cannot know; (4) your resolution of
+-  any ambiguity you noticed in the brief; (5) the report-file path and
+-  report contract. Exact values (numbers, magic strings, signatures, test
+-  cases) appear only in the brief.
+-- **Report file:** name the implementer's report file after the brief
+-  (brief `…/task-N-brief.md` → report `…/task-N-report.md`) and put it in
+-  the dispatch prompt. The implementer writes the full report there and
 -  returns only status, commits, a one-line test summary, and concerns.
-+  returns only status, files changed, a one-line test summary, and concerns.
- - **Reviewer inputs:** the task reviewer gets three paths — the same brief
-   file, the report file, and the review package — plus the global
-   constraints that bind the task.
-@@ -256,7 +285,7 @@ a ledger file, not only in todos.
+-- **Reviewer inputs:** the task reviewer gets three paths — the same brief
+-  file, the report file, and the review package — plus the global
+-  constraints that bind the task.
++  uniquely named file and prints its repo-relative path. Compose the
++  dispatch so the brief stays the single source of requirements. Your
++  dispatch should contain: (1) one line on where this task fits in the
++  project; (2) the brief's repo-relative path, introduced as "read this
++  first — it is your requirements, with the exact values to use verbatim";
++  (3) interfaces and decisions from earlier tasks that the brief cannot
++  know; (4) your resolution of any ambiguity you noticed in the brief;
++  (5) the report destination and report contract. Exact values (numbers,
++  magic strings, signatures, test cases) appear only in the brief.
++- **Report file:** the report destination is `local://task-N-report.md`
++  (matching the brief's number) — put it in the dispatch prompt. The
++  implementer writes the full report there and returns only status, files
++  changed, a one-line test summary, and concerns. Never point reports at
++  the repo: the SDD workspace is self-gitignored, so a report written
++  inside an isolated snapshot never reaches the parked ref, while
++  `local://` resolves to the same shared file for you, the implementer,
++  and the reviewer — before any merge.
++- **Reviewer inputs:** the task reviewer gets three handles — the same
++  repo-relative brief path, the `local://` report URI, and the review
++  package path — plus the global constraints that bind the task.
+ - Fix dispatches append their fix report (with test results) to the same
+-  report file and return a short summary; re-reviews read the updated file.
++  `local://` report file and return a short summary; re-reviews read the
++  updated file.
+ 
+ ## Durable Progress
+ 
+@@ -256,7 +300,7 @@ a ledger file, not only in todos.
    not marked complete.
  - When a task's review comes back clean, append one line to the ledger in
    the same message as your other bookkeeping:
@@ -271,7 +337,7 @@ index d8ca081..6fccf1e 100644
  - The ledger is your recovery map: the commits it names exist in git even
    when your context no longer remembers creating them. After compaction,
    trust the ledger and `git log` over your own recollection.
-@@ -275,53 +304,56 @@ a ledger file, not only in todos.
+@@ -275,53 +319,56 @@ a ledger file, not only in todos.
  You: I'm using Subagent-Driven Development to execute this plan.
  
  [Read plan file once: docs/superpowers/plans/feature-plan.md]
@@ -346,7 +412,7 @@ index d8ca081..6fccf1e 100644
  
  ...
  
-@@ -337,7 +369,7 @@ Done!
+@@ -337,7 +384,7 @@ Done!
  **vs. Manual execution:**
  - Subagents follow TDD naturally
  - Fresh context per task (no confusion)
@@ -355,7 +421,7 @@ index d8ca081..6fccf1e 100644
  - Subagent can ask questions (before AND during work)
  
  **vs. Executing Plans:**
-@@ -367,10 +399,9 @@ Done!
+@@ -367,10 +414,9 @@ Done!
  ## Red Flags
  
  **Never:**
@@ -367,7 +433,7 @@ index d8ca081..6fccf1e 100644
  - Make a subagent read the whole plan file (hand it its task brief —
    `scripts/task-brief` — instead)
  - Skip scene-setting context (subagent needs to understand where task fits)
-@@ -382,8 +413,8 @@ Done!
+@@ -382,8 +428,8 @@ Done!
    dispatch prompt ("treat it as Minor at most") — the plan's example code is
    a starting point, not evidence that its weaknesses were chosen
  - Dispatch a task reviewer without a diff file — generate it first
@@ -378,7 +444,7 @@ index d8ca081..6fccf1e 100644
  - Move to next task while the review has open Critical/Important issues
  - Re-dispatch a task the progress ledger already marks complete — check
    the ledger (and `git log`) after any compaction or resume
-@@ -406,7 +437,6 @@ Done!
+@@ -406,7 +452,6 @@ Done!
  ## Integration
  
  **Required workflow skills:**
@@ -387,16 +453,19 @@ index d8ca081..6fccf1e 100644
  - **superpowers:requesting-code-review** - Code review template for the final whole-branch review
  - **superpowers:finishing-a-development-branch** - Complete development after all tasks
 diff --git a/skills/subagent-driven-development/implementer-prompt.md b/skills/subagent-driven-development/implementer-prompt.md
-index 218fcfe..4828709 100644
+index 218fcfe..55ed121 100644
 --- a/skills/subagent-driven-development/implementer-prompt.md
 +++ b/skills/subagent-driven-development/implementer-prompt.md
-@@ -1,12 +1,15 @@
+@@ -1,18 +1,25 @@
  # Implementer Subagent Prompt Template
  
 -Use this template when dispatching an implementer subagent.
 +Use this template when dispatching an implementer subagent. `isolated: true`
 +below is a task-tool parameter (required by the schema; implementers edit
 +files) — pass it on the tool call, not inside the prompt text.
++`[BRIEF_FILE]` is the brief's repo-RELATIVE path (as `scripts/task-brief`
++prints it); `[REPORT_URI]` is `local://task-N-report.md`. Never substitute
++an absolute path into either — see SKILL.md File Handoffs.
  
  ```
 -Subagent (general-purpose):
@@ -410,7 +479,14 @@ index 218fcfe..4828709 100644
    prompt: |
      You are implementing Task N: [task name]
  
-@@ -35,9 +38,11 @@ Subagent (general-purpose):
+     ## Task Description
+ 
+     Read your task brief first: [BRIEF_FILE]
++    (a path relative to your working directory)
+     It contains the full task text from the plan.
+ 
+     ## Context
+@@ -35,17 +42,24 @@ Subagent (general-purpose):
      1. Implement exactly what the task specifies
      2. Write tests (following TDD if task says to)
      3. Verify implementation works
@@ -419,13 +495,19 @@ index 218fcfe..4828709 100644
 -    6. Report back
 +    4. Self-review (see below)
 +    5. Report back
-+
+ 
+-    Work from: [directory]
 +    Do NOT run git or jj — you work in an isolated snapshot and the harness
 +    captures your changes automatically when you finish.
++
++    Your working directory IS the project root: an isolated snapshot that
++    contains the full repo at the same relative paths. Use relative paths
++    for every file operation and every command. NEVER use an absolute path
++    into the original checkout — not in file edits, not as a bash working
++    directory — it would bypass your snapshot and corrupt the shared tree.
++    The only non-relative target you write is your local:// report.
  
-     Work from: [directory]
- 
-@@ -45,7 +50,7 @@ Subagent (general-purpose):
+     **While you work:** If you encounter something unexpected or unclear, **ask questions**.
      It's always OK to pause and clarify. Don't guess or make assumptions.
  
      While iterating, run the focused test for what you're changing; run the
@@ -434,7 +516,7 @@ index 218fcfe..4828709 100644
  
      ## Code Organization
  
-@@ -74,7 +79,7 @@ Subagent (general-purpose):
+@@ -74,7 +88,7 @@ Subagent (general-purpose):
  
      **How to escalate:** Report back with status BLOCKED or NEEDS_CONTEXT. Describe
      specifically what you're stuck on, what you've tried, and what kind of help you need.
@@ -443,7 +525,16 @@ index 218fcfe..4828709 100644
      or break the task into smaller pieces.
  
      ## Before Reporting Back: Self-Review
-@@ -125,7 +130,7 @@ Subagent (general-purpose):
+@@ -112,7 +126,7 @@ Subagent (general-purpose):
+ 
+     ## Report Format
+ 
+-    Write your full report to [REPORT_FILE]:
++    Write your full report to [REPORT_URI]:
+     - What you implemented (or what you attempted, if blocked)
+     - What you tested and test results
+     - **TDD Evidence** (if TDD was required for this task):
+@@ -125,10 +139,10 @@ Subagent (general-purpose):
      Then report back with ONLY (under 15 lines — the detail lives in the
      report file):
      - **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
@@ -451,9 +542,38 @@ index 218fcfe..4828709 100644
 +    - Files changed (paths only)
      - One-line test summary (e.g. "14/14 passing, output pristine")
      - Your concerns, if any
-     - The report file path
+-    - The report file path
++    - The report URI
+ 
+     If BLOCKED or NEEDS_CONTEXT, put the specifics in the final message
+     itself — the controller acts on it directly.
+diff --git a/skills/subagent-driven-development/scripts/task-brief b/skills/subagent-driven-development/scripts/task-brief
+index 247a767..3f6275d 100755
+--- a/skills/subagent-driven-development/scripts/task-brief
++++ b/skills/subagent-driven-development/scripts/task-brief
+@@ -19,9 +19,14 @@ n=$2
+ 
+ if [ $# -eq 3 ]; then
+   out=$3
++  display=$out
+ else
+   dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
+   out="$dir/task-${n}-brief.md"
++  # Print the repo-relative form: dispatch prompts must reference the brief
++  # by a relative path — an absolute path steers isolated implementers back
++  # into the shared checkout (see SKILL.md File Handoffs).
++  display=".superpowers/sdd/task-${n}-brief.md"
+ fi
+ 
+ awk -v n="$n" '
+@@ -37,4 +42,4 @@ if [ ! -s "$out" ]; then
+   exit 3
+ fi
+ 
+-echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
++echo "wrote ${display}: $(wc -l < "$out" | tr -d ' ') lines"
 diff --git a/skills/subagent-driven-development/task-reviewer-prompt.md b/skills/subagent-driven-development/task-reviewer-prompt.md
-index 588a402..1d1c3fb 100644
+index 588a402..8615d52 100644
 --- a/skills/subagent-driven-development/task-reviewer-prompt.md
 +++ b/skills/subagent-driven-development/task-reviewer-prompt.md
 @@ -8,10 +8,8 @@ code quality.
@@ -468,12 +588,34 @@ index 588a402..1d1c3fb 100644
    prompt: |
      You are reviewing one task's implementation: first whether it matches its
      requirements, then whether it is well-built. This is a task-scoped gate,
-@@ -166,7 +164,7 @@ Subagent (general-purpose):
+@@ -27,7 +25,7 @@ Subagent (general-purpose):
+ 
+     ## What the Implementer Claims They Built
+ 
+-    Read the implementer's report: [REPORT_FILE]
++    Read the implementer's report: [REPORT_URI]
+ 
+     ## Diff Under Review
+ 
+@@ -166,15 +164,16 @@ Subagent (general-purpose):
  ```
  
  **Placeholders:**
 -- `[MODEL]` — REQUIRED: reviewer model per SKILL.md Model Selection
+-- `[BRIEF_FILE]` — REQUIRED: the task brief file (`scripts/task-brief PLAN N`
+-  prints the path; same file the implementer worked from)
 +- (reviews always dispatch the `reviewer` agent — see SKILL.md Agent Selection)
- - `[BRIEF_FILE]` — REQUIRED: the task brief file (`scripts/task-brief PLAN N`
-   prints the path; same file the implementer worked from)
++- `[BRIEF_FILE]` — REQUIRED: the task brief's repo-relative path
++  (`scripts/task-brief PLAN N` prints it; same file the implementer
++  worked from)
  - `[GLOBAL_CONSTRAINTS]` — the binding requirements copied verbatim from
+   the plan's Global Constraints section or the spec: exact values, formats,
+   and stated relationships between components (not process rules — those
+   are already in this template)
+-- `[REPORT_FILE]` — REQUIRED: the file the implementer wrote its detailed
+-  report to
++- `[REPORT_URI]` — REQUIRED: the `local://task-N-report.md` URI the
++  implementer wrote its detailed report to
+ - `[BASE_SHA]` — commit before this task
+ - `[HEAD_SHA]` — current commit
+ - `[DIFF_FILE]` — REQUIRED: the path the controller wrote the review
