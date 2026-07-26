@@ -1,0 +1,291 @@
+diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
+index 236b97ca7..b0b8b985f 100644
+--- a/packages/coding-agent/src/modes/controllers/event-controller.ts
++++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
+@@ -133,6 +133,13 @@ export class EventController {
+ 	#prevHideThinking = false;
+ 	#handlers: AgentSessionEventHandlers;
+ 	#terminalProgressActive = false;
++	// Tool name each pending component was created under, keyed weakly by the
++	// component. Providers may stream a tool call whose name is still a
++	// partial prefix when it first surfaces (llama.cpp's chat-diff streaming
++	// tolerates prefix->longer name growth while the call id stays stable),
++	// and ToolExecutionComponent binds its renderer to the name at
++	// construction — so a name change must displace and rebuild the component.
++	#pendingToolComponentNames = new WeakMap<object, string>();
+ 
+ 	constructor(private ctx: InteractiveModeContext) {
+ 		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
+@@ -733,6 +740,22 @@ export class EventController {
+ 			}
+ 			for (const content of this.ctx.streamingMessage.content) {
+ 				if (content.type !== "toolCall") continue;
++				// A pending component created under an earlier (partial) streamed
++				// name is bound to the wrong renderer for the rest of the stream
++				// (e.g. "wri" -> generic fallback while "write" owns a live
++				// preview). Displace it and let the creation path below rebuild
++				// it under the settled name.
++				const boundComponent = this.ctx.pendingTools.get(content.id);
++				if (boundComponent) {
++					const boundName = this.#pendingToolComponentNames.get(boundComponent);
++					if (boundName !== undefined && boundName !== content.name) {
++						if (this.ctx.chatContainer.isBlockUncommitted(boundComponent)) {
++							this.ctx.chatContainer.removeChild(boundComponent);
++						}
++						this.ctx.pendingTools.delete(content.id);
++						this.#toolTimelineComponents.delete(content.id);
++					}
++				}
+ 				if (content.name === "read") {
+ 					if (!readArgsHaveTarget(content.arguments)) {
+ 						// Args still streaming — defer until path is parseable so we can route to the
+@@ -751,6 +774,7 @@ export class EventController {
+ 							group.updateArgs(content.arguments, content.id);
+ 							this.ctx.pendingTools.set(content.id, group);
+ 							this.#toolTimelineComponents.set(content.id, group);
++							this.#pendingToolComponentNames.set(group, content.name);
+ 						}
+ 						continue;
+ 					}
+@@ -798,6 +822,7 @@ export class EventController {
+ 					this.ctx.chatContainer.addChild(component);
+ 					this.ctx.pendingTools.set(content.id, component);
+ 					this.#toolTimelineComponents.set(content.id, component);
++					this.#pendingToolComponentNames.set(component, content.name);
+ 					this.#toolArgsReveal.bind(content.id, component);
+ 				} else {
+ 					const component = this.ctx.pendingTools.get(content.id);
+diff --git a/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
+new file mode 100644
+index 000000000..d137d49b8
+--- /dev/null
++++ b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
+@@ -0,0 +1,101 @@
++/**
++ * Repro: openai-completions-style streaming — the provider throttle-parses
++ * `block.arguments` (every ~256 bytes) but never sets kStreamingPartialJson.
++ * Contract under test: the pending write preview must still grow while args
++ * stream (path + partial content visible), matching the partialJson path.
++ */
++import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
++import type { AssistantMessage } from "@oh-my-pi/pi-ai";
++import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
++import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
++import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
++import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
++import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
++import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
++
++beforeAll(async () => {
++	await initTheme();
++});
++
++function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMessage {
++	return {
++		role: "assistant",
++		content,
++		api: "openai-completions",
++		provider: "bam-vm",
++		model: "m",
++		usage: {
++			input: 0,
++			output: 0,
++			cacheRead: 0,
++			cacheWrite: 0,
++			totalTokens: 0,
++			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++		},
++		stopReason: "stop",
++		timestamp: 0,
++	} as unknown as AssistantMessage;
++}
++
++function createFixture(streamingMessage: AssistantMessage) {
++	const pendingTools = new Map<string, ToolExecutionComponent>();
++	const ctx = {
++		isInitialized: true,
++		streamingMessage,
++		streamingComponent: { setHideThinkingBlock() {}, markTranscriptBlockFinalized() {} },
++		noteDisplayableThinkingContent: () => false,
++		effectiveHideThinkingBlock: false,
++		pendingTools,
++		chatContainer: { addChild() {} },
++		ui: {
++			requestRender() {},
++			requestComponentRender() {},
++		},
++		viewSession: { getToolByName: () => undefined },
++		sessionManager: { getCwd: () => process.cwd() },
++		settings: { get: () => true },
++		toolOutputExpanded: false,
++	} as unknown as InteractiveModeContext;
++	return { controller: new EventController(ctx), pendingTools };
++}
++
++async function dispatch(controller: EventController, message: AssistantMessage) {
++	await controller.handleEvent({
++		type: "message_update",
++		message,
++		assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
++	} as Extract<AgentSessionEvent, { type: "message_update" }>);
++}
++
++describe("openai-completions style streaming (parsed arguments, no partialJson symbol)", () => {
++	afterEach(() => {
++		vi.useRealTimers();
++		resetSettingsForTest();
++		vi.restoreAllMocks();
++	});
++
++	it("renders a growing write preview from throttle-parsed arguments", async () => {
++		await Settings.init({ inMemory: true, cwd: process.cwd() });
++		const body = 'print("line 1")\n'.repeat(40);
++		// Parse #1: path plus first slice of content (what parseStreamingJsonThrottled yields)
++		const first = makeStreamingMessage([
++			{ type: "toolCall", id: "tc-1", name: "write", arguments: { path: "/tmp/demo.py", content: body.slice(0, 64) } },
++		]);
++		const { controller, pendingTools } = createFixture(first);
++		await dispatch(controller, first);
++		expect(pendingTools.size).toBe(1);
++		const component = pendingTools.get("tc-1")!;
++		const frame1 = Bun.stripANSI(component.render(100).join("\n"));
++		expect(frame1).toContain("demo.py");
++		expect(frame1).toContain('print("line 1")');
++
++		// Parse #2: content grew by another throttle window
++		const second = makeStreamingMessage([
++			{ type: "toolCall", id: "tc-1", name: "write", arguments: { path: "/tmp/demo.py", content: body.slice(0, 320) } },
++		]);
++		await dispatch(controller, second);
++		const frame2 = Bun.stripANSI(component.render(100).join("\n"));
++		expect(frame2).toContain('print("line 1")');
++		expect(frame2.length).toBeGreaterThanOrEqual(frame1.length);
++	});
++});
+diff --git a/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
+new file mode 100644
+index 000000000..4a2b7b85a
+--- /dev/null
++++ b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
+@@ -0,0 +1,121 @@
++/**
++ * Contract: providers may stream a tool call whose NAME is still a partial
++ * prefix when the call first surfaces, growing in later updates while the
++ * call id stays stable (llama.cpp's chat-diff streaming does exactly this:
++ * `common_chat_msg_diff::compute_diffs` explicitly tolerates prefix->longer
++ * name transitions, and the server generates the id at first surfacing).
++ *
++ * The pending tool component must rebind to the settled name — otherwise it
++ * stays on the generic renderer ("wri" has no renderer) and write/edit
++ * previews render blank until the tool completes.
++ */
++import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
++import type { AssistantMessage } from "@oh-my-pi/pi-ai";
++import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
++import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
++import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
++import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
++import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
++import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
++
++beforeAll(async () => {
++	await initTheme();
++});
++
++function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMessage {
++	return {
++		role: "assistant",
++		content,
++		api: "openai-completions",
++		provider: "mock",
++		model: "m",
++		usage: {
++			input: 0,
++			output: 0,
++			cacheRead: 0,
++			cacheWrite: 0,
++			totalTokens: 0,
++			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++		},
++		stopReason: "stop",
++		timestamp: 0,
++	} as unknown as AssistantMessage;
++}
++
++function createFixture() {
++	const pendingTools = new Map<string, ToolExecutionComponent>();
++	const removed: unknown[] = [];
++	const ctx = {
++		isInitialized: true,
++		streamingMessage: undefined as AssistantMessage | undefined,
++		streamingComponent: { setHideThinkingBlock() {}, markTranscriptBlockFinalized() {} },
++		noteDisplayableThinkingContent: () => false,
++		effectiveHideThinkingBlock: false,
++		pendingTools,
++		chatContainer: {
++			addChild() {},
++			removeChild(component: unknown) {
++				removed.push(component);
++			},
++			isBlockUncommitted: () => true,
++		},
++		ui: {
++			requestRender() {},
++			requestComponentRender() {},
++		},
++		viewSession: { getToolByName: () => undefined },
++		sessionManager: { getCwd: () => process.cwd() },
++		settings: { get: () => true },
++		toolOutputExpanded: false,
++	} as unknown as InteractiveModeContext;
++	return { controller: new EventController(ctx), pendingTools, ctx, removed };
++}
++
++async function dispatch(controller: EventController, ctx: InteractiveModeContext, message: AssistantMessage) {
++	(ctx as unknown as { streamingMessage: AssistantMessage }).streamingMessage = message;
++	await controller.handleEvent({
++		type: "message_update",
++		message,
++		assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
++	} as Extract<AgentSessionEvent, { type: "message_update" }>);
++}
++
++describe("streamed tool call with incrementally-growing name (llama.cpp shape)", () => {
++	afterEach(() => {
++		vi.useRealTimers();
++		resetSettingsForTest();
++		vi.restoreAllMocks();
++	});
++
++	it("rebinds the pending component to the settled name so the write preview streams", async () => {
++		await Settings.init({ inMemory: true, cwd: process.cwd() });
++		const { controller, pendingTools, ctx } = createFixture();
++		const body = 'print("line 1")\nprint("line 2")\nprint("line 3")\n';
++
++		// First surfacing: stable id, partial name, no parsed args yet.
++		await dispatch(
++			controller,
++			ctx,
++			makeStreamingMessage([{ type: "toolCall", id: "tc-1", name: "wri", arguments: {} }]),
++		);
++		expect(pendingTools.size).toBe(1);
++
++		// Name settles; args stream in (openai-completions shape: parsed
++		// `arguments`, no partial-JSON symbol).
++		await dispatch(
++			controller,
++			ctx,
++			makeStreamingMessage([
++				{ type: "toolCall", id: "tc-1", name: "write", arguments: { path: "/tmp/demo.py", content: body } },
++			]),
++		);
++
++		const component = pendingTools.get("tc-1");
++		if (!component) throw new Error("expected pending component for tc-1");
++		const frame = Bun.stripANSI(component.render(100).join("\n"));
++		// The write renderer shows a numbered-gutter body; the generic
++		// fallback dumps args on one escaped line and never matches this.
++		expect(frame).toMatch(/2 print\("line 2"\)/);
++		expect(frame).toContain("demo.py");
++	});
++});

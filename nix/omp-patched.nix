@@ -35,6 +35,14 @@
 #   every reviewer that batched findings burned schema-retry round trips.
 #   Array payloads for array-valued sections now validate against the
 #   property schema and splat into the section; the tool description says so.
+# - omp-streamed-tool-name-rebind: providers may stream a tool call whose
+#   name is still a partial prefix when it first surfaces (llama.cpp's
+#   chat-diff streaming: stable generated id, name grows "wri" -> "write"),
+#   but the TUI bound the pending component's renderer to the first-seen
+#   name — write/edit previews rendered as the blank generic fallback until
+#   the tool finished. The event controller now displaces and rebuilds the
+#   pending component when the streamed name changes. Ships two regression
+#   tests (openai parsed-args streaming + growing-name rebind).
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -71,6 +79,7 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-jj-prompt-instructions.patch
     ../patches/omp/omp-isolation-required-flag.patch
     ../patches/omp/omp-yield-array-sections.patch
+    ../patches/omp/omp-streamed-tool-name-rebind.patch
     ../patches/omp/omp-distro-default-settings.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
