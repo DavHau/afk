@@ -11,14 +11,22 @@ let
   # Distribution default settings, loaded via $OMP_DISTRO_CONFIG (the
   # omp-distro-default-settings patch) as a layer BELOW the user's global
   # config.yml — users override any of this at runtime and their writes
-  # persist normally. Short rationale comments only; NO modelRoles (the
-  # user's login/models are their own) and NO personal system-prompt content.
+  # persist normally. Short rationale comments only, and NO personal
+  # system-prompt content. modelRoles pins just the default model (see below);
+  # the user's logins and any further model choices stay their own.
   configFile = pkgs.writeText "distro-config.yml" ''
     startup:
       quiet: true
       # Skip the onboarding setup wizard by default; the distribution
       # pre-configures everything the wizard would ask about.
       setupWizard: false
+    modelRoles:
+      # Distribution default model. Only the `default` role is pinned: omp's
+      # `task` role inherits this model for subagents (it does NOT inherit the
+      # thinking suffix), so per-agent cost stays tunable through frontmatter
+      # `model:` / task.agentModelOverrides instead of a second hard pin here.
+      # Users override this in their own config.yml, which layers above this.
+      default: anthropic/claude-opus-5:low
     skills:
       # The full Superpowers library (afk-skills package output is the skills
       # root). Discovered skills reach every subagent's system prompt as
