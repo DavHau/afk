@@ -43,6 +43,12 @@
 #   the tool finished. The event controller now displaces and rebuilds the
 #   pending component when the streamed name changes. Ships two regression
 #   tests (openai parsed-args streaming + growing-name rebind).
+# - omp-auto-thinking-ceiling: the `auto` thinking level tops out at high
+#   instead of xhigh. `auto` classifies every user turn with a cheap model and
+#   xhigh doubles the reasoning budget over high, unsupervised. One clamp at
+#   the classifier's exit; explicit selections are untouched (a pinned level,
+#   and the `ultrathink` keyword, which clamps at its own call site, still
+#   reach the model's max). Ships one regression test.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -81,6 +87,7 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-yield-array-sections.patch
     ../patches/omp/omp-streamed-tool-name-rebind.patch
     ../patches/omp/omp-distro-default-settings.patch
+    ../patches/omp/omp-auto-thinking-ceiling.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
   # The pi-natives Rust addon is built once, from UNPATCHED upstream source,
