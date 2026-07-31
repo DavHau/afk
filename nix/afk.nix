@@ -29,10 +29,13 @@ let
       default: anthropic/claude-opus-5:low
     skills:
       # The full Superpowers library (afk-skills package output is the skills
-      # root). Discovered skills reach every subagent's system prompt as
-      # skill:// URIs; the superpowers extension injects using-superpowers.
+      # root) plus the distribution's own skills. Discovered skills reach every
+      # subagent's system prompt as skill:// URIs; the superpowers extension
+      # injects using-superpowers. Discovery is non-recursive: each directory
+      # holds <name>/SKILL.md.
       customDirectories:
         - ${afk-skills}
+        - ${../profile/skills}
     task:
       isolation:
         # overlayfs: read-only lower layer + copy-up on write, in-process so
