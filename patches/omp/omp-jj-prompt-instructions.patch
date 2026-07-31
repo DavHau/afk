@@ -37,7 +37,7 @@ index 4e61535..3471d88 100644
  3. **Dispatch phase.** Launch all parallel `task` subagents in one message, then collect every result (async results / `hub` wait) before moving on.
  4. **Verify phase.** Run the gates. On failure, dispatch fix-up subagents and re-verify. Do not advance with a red gate.
 diff --git a/packages/coding-agent/src/prompts/system/plan-mode-active.md b/packages/coding-agent/src/prompts/system/plan-mode-active.md
-index e03e0da..dcd0073 100644
+index fe1a1b8..50165ae 100644
 --- a/packages/coding-agent/src/prompts/system/plan-mode-active.md
 +++ b/packages/coding-agent/src/prompts/system/plan-mode-active.md
 @@ -1,7 +1,7 @@
@@ -50,10 +50,10 @@ index e03e0da..dcd0073 100644
  - You NEVER delete or rename `local://` artifacts.
  - You MUST write the canonical plan to `local://<slug>-plan.md`.
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index a2f286b..44e5d5f 100644
+index ef82a95..cec2ed9 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -202,7 +202,7 @@ EXECUTION WORKFLOW
+@@ -217,7 +217,7 @@ EXECUTION WORKFLOW
  - Prefer updating existing files over creating new ones.
  - Review changes from the user's perspective.
  {{#has tools "grep"}}- Grep instead of guessing.{{/has}}
@@ -62,7 +62,7 @@ index a2f286b..44e5d5f 100644
  
  # 5. Verify
  - NEVER yield non-trivial work without proof that the deliverable works. The proof method depends on the ask:
-@@ -270,5 +270,5 @@ Before declaring blocked:
+@@ -285,5 +285,5 @@ Before declaring blocked:
  
  <critical>
  - NEVER narrate or consider session limits, token or tool budgets, effort estimates, or how much you can finish. Not your concern—start as if unbounded; execute or delegate.

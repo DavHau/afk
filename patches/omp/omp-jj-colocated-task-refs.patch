@@ -19,11 +19,11 @@ What must survive a rebase:
   and the superpowers skill patches depend on that contract).
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 1a5a98b..1956bf9 100644
+index 2f37537..a9255aa 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -106,13 +106,13 @@ Artifacts and side channels:
-   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, `agent`/`isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
+@@ -109,13 +109,13 @@ Artifacts and side channels:
+   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `effort`, `outputSchema`, `schemaMode`, and `isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema.
  - Isolation mode (`task.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
 -- Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `omp/task/<id>`, cherry-pick into parent).
@@ -55,10 +55,10 @@ index c6e0a58..781ea64 100644
  				try {
  					const patchResult = await writeIsolationPatch(
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 86cdf73..0359a2d 100644
+index ecb26de..6329423 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -476,6 +476,34 @@ export interface CommitToBranchResult {
+@@ -504,6 +504,34 @@ export interface CommitToBranchResult {
  	 */
  	baseSha?: string;
  }
@@ -93,7 +93,7 @@ index 86cdf73..0359a2d 100644
  
  function baselineHasRootWip(baseline: RepoBaseline): boolean {
  	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
-@@ -637,11 +665,11 @@ interface FilteredAgentReplayOptions {
+@@ -665,11 +693,11 @@ interface FilteredAgentReplayOptions {
  
  async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Promise<void> {
  	const baselineSha = opts.baseline.root.headCommit;
@@ -105,9 +105,9 @@ index 86cdf73..0359a2d 100644
 -		await git.worktree.add(opts.repoRoot, tmpDir, opts.branchName);
 +		await git.worktree.add(opts.repoRoot, tmpDir, opts.branchName, { detach: true });
  		const agentCommits = await git.revList.range(opts.isolationDir, baselineSha, opts.isolationHead);
- 		const dirtyBaselineTree = await writeSyntheticTree(opts.isolationDir, baselineSha, [
- 			opts.baseline.root.staged,
-@@ -702,6 +730,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+ 		const baselineWip = [opts.baseline.root.staged, opts.baseline.root.unstaged, opts.baseline.root.untrackedPatch];
+ 		// Seed the parent ODB with the dirty-side blobs needed by `git apply
+@@ -734,6 +762,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  				await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
  			}
  		}
@@ -115,7 +115,7 @@ index 86cdf73..0359a2d 100644
  	} finally {
  		await git.worktree.tryRemove(opts.repoRoot, tmpDir);
  		await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -765,9 +794,9 @@ export async function commitToBranch(
+@@ -797,9 +826,9 @@ export async function commitToBranch(
  		} else {
  			// Transfer the agent's commit objects (which live in isolation's `.git`,
  			// stranded once `cleanupIsolation` tears the overlay down) into the parent
@@ -128,7 +128,7 @@ index 86cdf73..0359a2d 100644
  
  			// Leftover = anything still uncommitted in isolation on top of the
  			// agent's last commit (staged, unstaged, untracked). The agent didn't
-@@ -783,9 +812,10 @@ export async function commitToBranch(
+@@ -815,9 +844,10 @@ export async function commitToBranch(
  			if (leftoverPatch.trim()) {
  				const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  				try {
@@ -140,7 +140,7 @@ index 86cdf73..0359a2d 100644
  				} finally {
  					await git.worktree.tryRemove(repoRoot, tmpDir);
  					await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -794,15 +824,16 @@ export async function commitToBranch(
+@@ -826,15 +856,16 @@ export async function commitToBranch(
  		}
  		branchCreated = true;
  	} else if (rootPatch.trim()) {
@@ -159,7 +159,7 @@ index 86cdf73..0359a2d 100644
  		} finally {
  			await git.worktree.tryRemove(repoRoot, tmpDir);
  			await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -853,7 +884,10 @@ export async function mergeTaskBranches(
+@@ -885,7 +916,10 @@ export async function mergeTaskBranches(
  		try {
  			for (const { branchName, baseSha } of branches) {
  				try {
@@ -171,7 +171,7 @@ index 86cdf73..0359a2d 100644
  					await git.cherryPick(repoRoot, target);
  				} catch (initialErr) {
  					// Empty cherry-picks are not conflicts: a commit whose net
-@@ -930,6 +964,10 @@ export async function mergeTaskBranches(
+@@ -962,6 +996,10 @@ export async function mergeTaskBranches(
  /** Clean up temporary task branches. */
  export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
  	for (const branch of branches) {
@@ -184,10 +184,10 @@ index 86cdf73..0359a2d 100644
  	}
  }
 diff --git a/packages/coding-agent/src/utils/git.ts b/packages/coding-agent/src/utils/git.ts
-index 2974b0c..b2b10bc 100644
+index 35342a7..837b022 100644
 --- a/packages/coding-agent/src/utils/git.ts
 +++ b/packages/coding-agent/src/utils/git.ts
-@@ -1571,6 +1571,16 @@ export const ref = {
+@@ -1866,6 +1866,16 @@ export const ref = {
  		if (result.exitCode !== 0) return null;
  		return result.stdout.trim() || null;
  	},
@@ -400,10 +400,10 @@ index 0000000..c3d6460
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 3ac79ef..1183744 100644
+index 4a38b21..1be2f9f 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -1006,4 +1006,82 @@ describe("commitToBranch preserves agent commits", () => {
+@@ -1299,4 +1299,82 @@ describe("commitToBranch preserves agent commits", () => {
  			expect(branchDiff).toContain("+agent-edit");
  		});
  	});

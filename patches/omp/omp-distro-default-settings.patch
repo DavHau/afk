@@ -29,9 +29,10 @@ What must survive a rebase:
   #migrateRawSettings, same as the global config.
 
 diff --git a/packages/coding-agent/src/config/settings.ts b/packages/coding-agent/src/config/settings.ts
+index fe10e86..a10d076 100644
 --- a/packages/coding-agent/src/config/settings.ts
 +++ b/packages/coding-agent/src/config/settings.ts
-@@ -312,6 +312,8 @@
+@@ -325,6 +325,8 @@ export class Settings {
  	#storage: AgentStorage | null = null;
  
  	#configFiles: string[] = [];
@@ -40,34 +41,35 @@ diff --git a/packages/coding-agent/src/config/settings.ts b/packages/coding-agen
  	/** Global settings from config.yml/config.yaml */
  	#global: RawSettings = {};
  	/** Project settings from .claude/settings.yml etc */
-@@ -565,6 +567,7 @@
+@@ -608,6 +610,7 @@ export class Settings {
  		});
  		cloned.#storage = this.#storage;
  		cloned.#configPath = this.#configPath;
 +		cloned.#distro = structuredClone(this.#distro);
  		cloned.#global = structuredClone(this.#global);
  		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
- 		cloned.#configFiles = [...this.#configFiles];
-@@ -990,6 +993,7 @@
- 			await this.#seedLastChangelogVersionMarker();
- 		}
+ 		if (!this.#persist) cloned.#projectShellPathSource = this.#projectShellPathSource;
+@@ -1045,6 +1048,7 @@ export class Settings {
+ 		if (globalResult.status === "rejected") throw globalResult.reason;
+ 		if (projectResult.status === "rejected") throw projectResult.reason;
  
 +		this.#distro = await this.#loadDistroDefaults();
- 		this.#project = await projectPromise;
+ 		this.#project = projectResult.value;
  		this.#configOverlay = await this.#loadConfigOverlays();
  
-@@ -1007,6 +1011,7 @@
- 			this.#global = existingConfig;
+@@ -1076,6 +1080,7 @@ export class Settings {
+ 			this.#global = globalResult.value;
  		}
  
 +		this.#distro = await this.#loadDistroDefaults();
- 		this.#project = await projectPromise;
+ 		this.#project = projectResult.value;
  		this.#configOverlay = await this.#loadConfigOverlays();
  		this.#rebuildMerged();
-@@ -1083,6 +1088,18 @@
+@@ -1262,6 +1267,18 @@ export class Settings {
+ 		return merged;
  	}
  
- 	/**
++	/**
 +	 * Lenient loader for distribution defaults ($OMP_DISTRO_CONFIG): merged
 +	 * below the global config so user settings always win. A missing or
 +	 * malformed file degrades to {} with a logged warning, never an error —
@@ -79,11 +81,10 @@ diff --git a/packages/coding-agent/src/config/settings.ts b/packages/coding-agen
 +		return (await this.#loadYamlIfPresent(path.resolve(expandTilde(filePath)))) ?? {};
 +	}
 +
-+	/**
+ 	/**
  	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
  	 * missing or malformed files are hard errors so a typo'd path cannot
- 	 * silently fall back to the persistent settings.
-@@ -1734,7 +1751,7 @@
+@@ -2141,7 +2158,7 @@ export class Settings {
  	}
  
  	#rebuildMerged(): void {

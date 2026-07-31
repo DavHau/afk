@@ -1,6 +1,8 @@
 # omp-patched: omp from llm-agents + the jj-relevant patch set. Originally
-# vendored from hyperconfig, rebased onto omp 17.0.0, re-rebased onto 17.0.4
-# (isolation orchestration moved into task/structured-subagent.ts) in
+# vendored from hyperconfig, rebased onto omp 17.0.0, then 17.0.4 (isolation
+# orchestration moved into task/structured-subagent.ts), then 17.2.1 (eval
+# isolation tests moved to test/eval/agent-bridge-policy.test.ts; the
+# auto-thinking ceiling became upstream's autoEffortCeiling()) in
 # patches/omp/. Only
 # the jj patches ship here; personal patches (account/statusline/output-crop)
 # stay out.
@@ -45,10 +47,13 @@
 #   tests (openai parsed-args streaming + growing-name rebind).
 # - omp-auto-thinking-ceiling: the `auto` thinking level tops out at high
 #   instead of xhigh. `auto` classifies every user turn with a cheap model and
-#   xhigh doubles the reasoning budget over high, unsupervised. One clamp at
-#   the classifier's exit; explicit selections are untouched (a pinned level,
-#   and the `ultrathink` keyword, which clamps at its own call site, still
-#   reach the model's max). Ships one regression test.
+#   xhigh doubles the reasoning budget over high, unsupervised. Since 17.2.1
+#   the cap lives in autoEffortCeiling() (upstream's
+#   providers.autoThinkingMaxEffort only chooses xhigh vs max), so the ceiling
+#   also shapes the classifier prompt: `max` is never offered. Explicit
+#   selections are untouched (a pinned level, and the `ultrathink` keyword,
+#   which clamps at its own call site, still reach the model's max). Ships one
+#   regression test and retargets the five upstream max-opt-in tests.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed

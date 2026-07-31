@@ -1,25 +1,135 @@
+afk: the `auto` thinking level tops out at high instead of xhigh.
+
+What must survive a rebase:
+- One cap, at the classifier's ceiling. Since 17.2.1 upstream computes the
+  ceiling in autoEffortCeiling() from providers.autoThinkingMaxEffort, which
+  only chooses xhigh vs max — so the distro cap replaces that function's body
+  with Effort.High and caps the local-classifier branch the same way.
+- Explicit selections are untouched: a pinned level, and the `ultrathink`
+  keyword (clamped at its own call site), still reach the model's max.
+
 diff --git a/packages/coding-agent/src/auto-thinking/classifier.ts b/packages/coding-agent/src/auto-thinking/classifier.ts
-index 381e3b3f5..02ef6ecde 100644
+index 70a00f3..2787b92 100644
 --- a/packages/coding-agent/src/auto-thinking/classifier.ts
 +++ b/packages/coding-agent/src/auto-thinking/classifier.ts
-@@ -68,7 +68,11 @@ export async function classifyDifficulty(
- 		backend === ONLINE_AUTO_THINKING_MODEL_KEY
- 			? await classifyOnline(input, deps)
- 			: await classifyLocal(input, backend, deps);
--	return clampAutoThinkingEffort(deps.model, effort);
-+	// Distro policy: `auto` tops out at high. xhigh doubles the reasoning budget
-+	// for a bucket a cheap classifier picks unsupervised; an explicit selection
-+	// (pinned level, or the `ultrathink` keyword, which clamps at its own call
-+	// site) still reaches the model's ceiling.
-+	return clampAutoThinkingEffort(deps.model, effort === Effort.XHigh || effort === Effort.Max ? Effort.High : effort);
+@@ -39,14 +39,17 @@ import { tinyModelClient } from "../tiny/title-client";
+ const DIFFICULTY_SYSTEM_PROMPTS: Partial<Record<"max" | "xhigh", string>> = {};
+ 
+ /**
+- * Highest effort this turn's classification may resolve to: the configured
+- * ceiling, further limited by what the target model actually exposes. The
+- * default keeps `auto` one tier below the top, so only an explicit
+- * `ultrathink` reaches {@link Effort.Max}.
++ * Highest effort this turn's classification may resolve to.
++ *
++ * Distro policy: `auto` tops out at {@link Effort.High}. xhigh doubles the
++ * reasoning budget for a bucket a cheap classifier picks unsupervised; an
++ * explicit selection (a pinned level, or the `ultrathink` keyword, which
++ * clamps at its own call site) still reaches the model's ceiling. Upstream's
++ * `providers.autoThinkingMaxEffort` setting only chooses between xhigh and
++ * max, so the cap lives here.
+  */
+-function autoEffortCeiling(deps: ClassifyDifficultyDeps): Effort {
+-	if (deps.settings.get("providers.autoThinkingMaxEffort") !== Effort.Max) return Effort.XHigh;
+-	return getSupportedEfforts(deps.model).includes(Effort.Max) ? Effort.Max : Effort.XHigh;
++function autoEffortCeiling(_deps: ClassifyDifficultyDeps): Effort {
++	return Effort.High;
  }
  
- async function classifyOnline(input: string, deps: ClassifyDifficultyDeps): Promise<Effort> {
+ function difficultySystemPromptFor(ceiling: Effort): string {
+@@ -91,10 +94,9 @@ export async function classifyDifficulty(
+ 	const backend = deps.settings.get("providers.autoThinkingModel");
+ 	const input = preprocessTinyMessage(promptText);
+ 	const online = backend === ONLINE_AUTO_THINKING_MODEL_KEY;
+-	// The 3-bucket local classifier cannot select `max`, so its ceiling stays at
+-	// XHigh whatever the setting says — otherwise a sparse ladder would snap its
+-	// `hard` bucket up to a tier it never chose.
+-	const ceiling = online ? autoEffortCeiling(deps) : Effort.XHigh;
++	// Distro policy caps both paths at high (see autoEffortCeiling); the local
++	// 3-bucket classifier cannot select `max` anyway.
++	const ceiling = online ? autoEffortCeiling(deps) : Effort.High;
+ 	const effort = online ? await classifyOnline(input, deps, ceiling) : await classifyLocal(input, backend, deps);
+ 	// The ceiling goes into the clamp itself: capping the request alone is not
+ 	// enough, because a sparse ladder snaps an excluded request back up.
 diff --git a/packages/coding-agent/test/auto-thinking-classifier.test.ts b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-index dd3b1b3b7..a87b2a7cc 100644
+index 3e0eea5..26a631e 100644
 --- a/packages/coding-agent/test/auto-thinking-classifier.test.ts
 +++ b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-@@ -210,6 +210,45 @@ describe("auto thinking classifier helpers", () => {
+@@ -277,15 +277,14 @@ describe("auto thinking classifier helpers", () => {
+ 	const MAX_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
+ 	const XHIGH_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
+ 
+-	it("offers the max label only when opted in on a model that exposes the tier", async () => {
++	it("never offers the max label — the distro ceiling is high", async () => {
++		// Distro policy caps `auto` at high, so the opt-in setting is inert: the
++		// classifier prompt must never advertise a tier the clamp cannot return.
+ 		const optedIn = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "high", "max");
+ 		await classifyDifficulty("refactor the scheduler", optedIn.deps);
+ 		const optedInRequest = optedIn.completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt: string[] };
+-		// The label alone is inert: the criteria and the tie-break exception are
+-		// what make the tier reachable, so all three must ship together.
+-		expect(optedInRequest.systemPrompt[0]).toContain("`max`");
+-		expect(optedInRequest.systemPrompt[0]).toContain("no reproduction to work from");
+-		expect(optedInRequest.systemPrompt[0]).toContain("except between `xhigh` and `max`");
++		expect(optedInRequest.systemPrompt[0]).not.toMatch(/\bmax\b/);
++		expect(optedInRequest.systemPrompt[0]).not.toContain("no reproduction to work from");
+ 
+ 		vi.restoreAllMocks();
+ 
+@@ -308,20 +307,19 @@ describe("auto thinking classifier helpers", () => {
+ 		expect(unsupportedRequest.systemPrompt[0]).toContain("choose the lower one.");
+ 	});
+ 
+-	it("resolves max only when opted in, and snaps it to the ceiling otherwise", async () => {
++	it("snaps max down to high with or without the max opt-in", async () => {
+ 		const optedIn = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "max", "max");
+-		expect(await classifyDifficulty("untangle this cross-service race", optedIn.deps)).toBe(Effort.Max);
++		expect(await classifyDifficulty("untangle this cross-service race", optedIn.deps)).toBe(Effort.High);
+ 
+ 		vi.restoreAllMocks();
+ 
+-		// Hallucinated `max` on a max-capable model must not cross the default ceiling.
+ 		const defaulted = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "max");
+-		expect(await classifyDifficulty("untangle this cross-service race", defaulted.deps)).toBe(Effort.XHigh);
++		expect(await classifyDifficulty("untangle this cross-service race", defaulted.deps)).toBe(Effort.High);
+ 	});
+ 
+-	it("resolves the sparse ladder's max tier when opted in", async () => {
++	it("resolves the sparse ladder's high tier even when opted in to max", async () => {
+ 		const fixture = createOnlineFixture(buildLadderModel("mock-sparse", [Effort.High, Effort.Max]), "max", "max");
+-		expect(await classifyDifficulty("cut over the storage layer", fixture.deps)).toBe(Effort.Max);
++		expect(await classifyDifficulty("cut over the storage layer", fixture.deps)).toBe(Effort.High);
+ 	});
+ 
+ 	it("takes the first label when the classifier echoes several", async () => {
+@@ -335,13 +333,13 @@ describe("auto thinking classifier helpers", () => {
+ 		expect(await classifyDifficulty("rename a helper", fixture.deps)).toBe(Effort.Low);
+ 	});
+ 
+-	it("snaps a hallucinated max back to the model's ceiling instead of failing the turn", async () => {
++	it("snaps a hallucinated max back to the distro ceiling instead of failing the turn", async () => {
+ 		const fixture = createOnlineFixture(buildLadderModel("mock-xhigh", XHIGH_LADDER), "max");
+-		expect(await classifyDifficulty("untangle this cross-service race", fixture.deps)).toBe(Effort.XHigh);
++		expect(await classifyDifficulty("untangle this cross-service race", fixture.deps)).toBe(Effort.High);
+ 	});
+ 
+-	it("resolves no level on a max-only ladder without opt-in", async () => {
+-		// `["max"]` has nothing at or below the default ceiling, so the model clamp
++	it("resolves no level on a max-only ladder, opt-in or not", async () => {
++		// `["max"]` has nothing at or below the distro ceiling, so the model clamp
+ 		// must not snap the request back up — auto yields nothing and the session
+ 		// keeps its current level.
+ 		const defaulted = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "xhigh");
+@@ -350,7 +348,7 @@ describe("auto thinking classifier helpers", () => {
+ 		vi.restoreAllMocks();
+ 
+ 		const optedIn = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "max", "max");
+-		expect(await classifyDifficulty("cut over the storage layer", optedIn.deps)).toBe(Effort.Max);
++		expect(await classifyDifficulty("cut over the storage layer", optedIn.deps)).toBeUndefined();
+ 	});
+ 
+ 	it("has no provisional level on a max-only ladder", () => {
+@@ -388,6 +386,45 @@ describe("auto thinking classifier helpers", () => {
  		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);
  	});
  

@@ -64,10 +64,10 @@ index f09b469..b27482b 100644
  	return validators;
  }
 diff --git a/packages/coding-agent/src/tools/yield.ts b/packages/coding-agent/src/tools/yield.ts
-index e606850..c08e9b0 100644
+index fec2059..ffe3024 100644
 --- a/packages/coding-agent/src/tools/yield.ts
 +++ b/packages/coding-agent/src/tools/yield.ts
-@@ -212,7 +212,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
+@@ -215,7 +215,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
  	readonly label = "Submit Result";
  	readonly description =
  		"Submit subagent output. Omit `type` for the usual final structured result.\n\n" +
@@ -104,7 +104,7 @@ index a89b50c..6a78059 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index 3a88a24..ed459e4 100644
+index 574bee4..e78cd06 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
 @@ -7,7 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";

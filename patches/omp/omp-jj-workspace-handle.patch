@@ -17,11 +17,11 @@ What must survive a rebase:
   parked; nested git repos under a jj workspace are not captured.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 4169891..e539020 100644
+index a9255aa..ebc4d41 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -106,6 +106,7 @@ Artifacts and side channels:
-   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, `agent`/`isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
+@@ -109,6 +109,7 @@ Artifacts and side channels:
+   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `effort`, `outputSchema`, `schemaMode`, and `isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema.
  - Isolation mode (`task.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
 +- Workspace resolution: a git checkout uses the git machinery above; a pure jj workspace (`jj workspace add` secondary, or non-colocated repo) runs capture against jj's backing git store (baseline = the `@` commit, task refs parked as `refs/omp/task/<id>` in the store) and lands merges as a described jj commit — 3-way merged in-store via `git merge-tree`, so a conflict leaves the workspace untouched and the ref parked. The snapshot's `.jj` pointer is removed before the subagent runs, so nothing inside isolation can write through to the shared store. Nested git repos under a jj workspace are not captured.
@@ -49,10 +49,10 @@ index da211e3..2184515 100644
  			try {
  				const commitResult = await vcs.commitToTaskRef(
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index be9360d..6302e73 100644
+index 7023d6a..1adebe9 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -546,7 +546,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -555,7 +555,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  				const message = error instanceof Error ? error.message : String(error);
  				throw new StructuredSubagentError(
  					"isolation",
@@ -471,10 +471,10 @@ index d1949eb..6e7d4b8 100644
  	return new GitCheckoutHandle(root);
  }
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 0359a2d..d48cec1 100644
+index 6329423..d8edec9 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -418,12 +418,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
+@@ -419,12 +419,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
  	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
  }
  
@@ -494,11 +494,11 @@ index 0359a2d..d48cec1 100644
  	const sourceCommonDir = repository?.commonDir ?? path.join(repoRoot, ".git");
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
 diff --git a/packages/coding-agent/src/utils/jj.ts b/packages/coding-agent/src/utils/jj.ts
-index 655decf..0bf825e 100644
+index 6248392..10e33e3 100644
 --- a/packages/coding-agent/src/utils/jj.ts
 +++ b/packages/coding-agent/src/utils/jj.ts
-@@ -121,6 +121,13 @@ async function runText(cwd: string, args: readonly string[], options: CommandOpt
- 	return (await runChecked(cwd, args, options)).stdout;
+@@ -142,6 +142,13 @@ async function runOptionalText(
+ 	}
  }
  
 +/**
@@ -621,10 +621,10 @@ index b214fea..e9f5c3c 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
-index fc28abf..1888703 100644
+index 371a4d2..3f8ff82 100644
 --- a/packages/coding-agent/test/task/structured-subagent.test.ts
 +++ b/packages/coding-agent/test/task/structured-subagent.test.ts
-@@ -260,7 +260,7 @@ describe("structured subagent primitive", () => {
+@@ -267,7 +267,7 @@ describe("structured subagent primitive", () => {
  			runStructuredSubagent(
  				request({ session: session({ isolationMode: "worktree" }), isolation: { requested: true } }),
  			),
@@ -849,7 +849,7 @@ index 0760f0e..bfdbf9e 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 1183744..6edb961 100644
+index 1be2f9f..7a39402 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -152,6 +152,27 @@ describe("worktree isolation helpers", () => {

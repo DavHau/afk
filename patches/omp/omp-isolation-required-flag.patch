@@ -36,19 +36,20 @@ What must survive a rebase:
   isolation is off.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
+index ebc4d41..6f8b64b 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -26,7 +26,7 @@
  
  ## Inputs
  
--The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, outputSchema?, schemaMode?, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
-+The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, outputSchema?, schemaMode?, isolated }` (`isolated` exists — and is required — only when `task.isolation.mode` is not `none`):
+-The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
++The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated }` (`isolated` exists — and is required — only when `task.isolation.mode` is not `none`):
  
- - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `outputSchema`, `schemaMode`, and `isolated` are per item, so one call may mix agent types and output contracts.
+ - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `effort`, `outputSchema`, `schemaMode`, and `isolated` are per item, so one call may mix agent types and output contracts.
  - **Flat shape** (`task.batch` off): `{ ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each spawn's `task` references; subagents share the parent's `local://` root.
-@@ -40,7 +40,7 @@
- | `task` | `string` | Yes | The work — complete, self-contained instructions. Empty-after-trim is rejected. Item field in batch shape, top-level in flat shape. |
+@@ -41,7 +41,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
+ | `effort` | `"lo" \| "med" \| "hi"` | No | Per-spawn thinking effort, mapped onto the resolved model's supported range (lowest/middle/highest level it tops out at, e.g. `high`/`xhigh`/`max`). Overrides the agent's default selector, including `auto`; omitting it keeps the agent's configured selector — automatic per-prompt classification only for agents configured `auto` (e.g. the bundled `task`); `scout`/`sonic` configure `medium`. Item field in batch shape, top-level in flat shape. |
  | `outputSchema` | JSON Schema object | No | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape. |
  | `schemaMode` | `"permissive" \| "strict"` | No | Validation mode for the effective output schema. Overrides the parent session mode; defaults to `permissive`. Item field in batch shape, top-level in flat shape. |
 -| `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
@@ -57,9 +58,10 @@ diff --git a/docs/tools/task.md b/docs/tools/task.md
  There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
  
 diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
+index b5d8189..ea8691f 100644
 --- a/packages/coding-agent/src/prompts/tools/task.md
 +++ b/packages/coding-agent/src/prompts/tools/task.md
-@@ -30,9 +30,9 @@
+@@ -31,9 +31,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
    - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
  {{#if isolationEnabled}}
  {{#if applyIsolatedChanges}}
@@ -71,7 +73,7 @@ diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-a
  {{/if}}
  {{/if}}
  {{else}}
-@@ -44,9 +44,9 @@
+@@ -46,9 +46,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
  - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
  {{#if isolationEnabled}}
  {{#if applyIsolatedChanges}}
@@ -83,37 +85,11 @@ diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-a
  {{/if}}
  {{/if}}
  {{/if}}
-diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
---- a/packages/coding-agent/test/task/task-schema.test.ts
-+++ b/packages/coding-agent/test/task/task-schema.test.ts
-@@ -13,12 +13,12 @@
- 
- describe("task schema (single-spawn)", () => {
- 	it("accepts {agent, task}", () => {
--		const parsed = taskSchema({ agent: "scout", task: "Map the auth module." });
-+		const parsed = taskSchema({ agent: "scout", task: "Map the auth module.", isolated: false });
- 		expect(parsed instanceof type.errors).toBe(false);
- 	});
- 
- 	it("defaults agent to `task` when omitted", () => {
--		const parsed = taskSchema({ task: "Map the auth module." });
-+		const parsed = taskSchema({ task: "Map the auth module.", isolated: false });
- 		expect(parsed instanceof type.errors).toBe(false);
- 		if (!(parsed instanceof type.errors)) {
- 			expect(parsed.agent).toBe("task");
-@@ -36,6 +36,7 @@
- 			agent: "scout",
- 			task: "Map the auth module.",
- 			outputSchema,
-+			isolated: false,
- 			schemaMode: "strict",
- 			context: "shared background",
- 			tasks: [{ name: "A", task: "..." }],
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index 62007fd..67469c5 100644
+index d494908..8e0434a 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
-@@ -123,7 +123,7 @@ const taskItemSchemaIsolated = type({
+@@ -125,7 +125,7 @@ const taskItemSchemaIsolated = type({
  	task: "string",
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
@@ -122,7 +98,7 @@ index 62007fd..67469c5 100644
  	"+": "delete",
  });
  
-@@ -139,7 +139,12 @@ export interface TaskItem {
+@@ -143,7 +143,12 @@ export interface TaskItem {
  	outputSchema?: unknown;
  	/** Validation behavior for a caller-provided or inherited output schema. */
  	schemaMode?: "permissive" | "strict";
@@ -136,7 +112,7 @@ index 62007fd..67469c5 100644
  	isolated?: boolean;
  }
  
-@@ -149,7 +154,7 @@ export const taskSchema = type({
+@@ -153,7 +158,7 @@ export const taskSchema = type({
  	task: "string",
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
@@ -145,8 +121,8 @@ index 62007fd..67469c5 100644
  	"+": "delete",
  });
  const taskSchemaNoIsolation = type({
-@@ -202,7 +207,7 @@ function createTaskSchema(options: {
- 				task: "string",
+@@ -209,7 +214,7 @@ function createTaskSchema(options: {
+ 				...effortField,
  				"outputSchema?": outputSchemaInputSchema,
  				"schemaMode?": '"permissive" | "strict"',
 -				"isolated?": "boolean",
@@ -154,8 +130,8 @@ index 62007fd..67469c5 100644
  				"+": "delete",
  			});
  			return type.raw({
-@@ -232,7 +237,7 @@ function createTaskSchema(options: {
- 			task: "string",
+@@ -241,7 +246,7 @@ function createTaskSchema(options: {
+ 			...effortField,
  			"outputSchema?": outputSchemaInputSchema,
  			"schemaMode?": '"permissive" | "strict"',
 -			"isolated?": "boolean",
@@ -164,13 +140,17 @@ index 62007fd..67469c5 100644
  		});
  	}
 diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
-index 9af6cb4..1db5b17 100644
+index c51535c..d27ead5 100644
 --- a/packages/coding-agent/test/task/task-batch.test.ts
 +++ b/packages/coding-agent/test/task/task-batch.test.ts
-@@ -137,6 +137,29 @@ describe("task.batch schema gating", () => {
- 		expect(items?.properties?.isolated).toBeDefined();
- 	});
- 
+@@ -180,7 +180,30 @@ describe("task.batch schema gating", () => {
+ 				},
+ 			}),
+ 		);
+-		expect(captureTool.description).toContain("without modifying the parent checkout");
++		expect(captureTool.description).toContain("never touching your worktree");
++	});
++
 +	it("requires isolated on every item when isolation is enabled", async () => {
 +		mockDiscovery();
 +
@@ -192,13 +172,38 @@ index 9af6cb4..1db5b17 100644
 +		);
 +		const offItems = (getSchemaProperties(off).tasks as { items?: { required?: string[] } }).items;
 +		expect(offItems?.required ?? []).not.toContain("isolated");
-+	});
-+
+ 	});
+ 
  	it("hides isolation from the dynamic batch schema in plan mode", async () => {
- 		mockDiscovery();
- 		const tool = await TaskTool.create(
+diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
+index fed78ad..6966992 100644
+--- a/packages/coding-agent/test/task/task-schema.test.ts
++++ b/packages/coding-agent/test/task/task-schema.test.ts
+@@ -13,12 +13,12 @@ import { type } from "arktype";
+ 
+ describe("task schema (single-spawn)", () => {
+ 	it("accepts {agent, task}", () => {
+-		const parsed = taskSchema({ agent: "scout", task: "Map the auth module." });
++		const parsed = taskSchema({ agent: "scout", task: "Map the auth module.", isolated: false });
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 	});
+ 
+ 	it("defaults agent to `task` when omitted", () => {
+-		const parsed = taskSchema({ task: "Map the auth module." });
++		const parsed = taskSchema({ task: "Map the auth module.", isolated: false });
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 		if (!(parsed instanceof type.errors)) {
+ 			expect(parsed.agent).toBe("task");
+@@ -36,6 +36,7 @@ describe("task schema (single-spawn)", () => {
+ 			agent: "scout",
+ 			task: "Map the auth module.",
+ 			outputSchema,
++			isolated: false,
+ 			schemaMode: "strict",
+ 			context: "shared background",
+ 			tasks: [{ name: "A", task: "..." }],
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index 78c11d1..4420227 100644
+index 176abbd..da61ee7 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
 @@ -6,9 +6,10 @@ import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/type

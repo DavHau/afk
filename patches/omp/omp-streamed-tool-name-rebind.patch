@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
-index 236b97ca7..b0b8b985f 100644
+index 546b605..3578a77 100644
 --- a/packages/coding-agent/src/modes/controllers/event-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
-@@ -133,6 +133,13 @@ export class EventController {
+@@ -146,6 +146,13 @@ export class EventController {
  	#prevHideThinking = false;
  	#handlers: AgentSessionEventHandlers;
  	#terminalProgressActive = false;
@@ -16,7 +16,7 @@ index 236b97ca7..b0b8b985f 100644
  
  	constructor(private ctx: InteractiveModeContext) {
  		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-@@ -733,6 +740,22 @@ export class EventController {
+@@ -752,6 +759,22 @@ export class EventController {
  			}
  			for (const content of this.ctx.streamingMessage.content) {
  				if (content.type !== "toolCall") continue;
@@ -39,7 +39,7 @@ index 236b97ca7..b0b8b985f 100644
  				if (content.name === "read") {
  					if (!readArgsHaveTarget(content.arguments)) {
  						// Args still streaming — defer until path is parseable so we can route to the
-@@ -751,6 +774,7 @@ export class EventController {
+@@ -770,6 +793,7 @@ export class EventController {
  							group.updateArgs(content.arguments, content.id);
  							this.ctx.pendingTools.set(content.id, group);
  							this.#toolTimelineComponents.set(content.id, group);
@@ -47,17 +47,17 @@ index 236b97ca7..b0b8b985f 100644
  						}
  						continue;
  					}
-@@ -798,6 +822,7 @@ export class EventController {
+@@ -825,6 +849,7 @@ export class EventController {
  					this.ctx.chatContainer.addChild(component);
  					this.ctx.pendingTools.set(content.id, component);
  					this.#toolTimelineComponents.set(content.id, component);
 +					this.#pendingToolComponentNames.set(component, content.name);
  					this.#toolArgsReveal.bind(content.id, component);
- 				} else {
- 					const component = this.ctx.pendingTools.get(content.id);
+ 					// A held completion for this call means its `tool_execution_end`
+ 					// outran this streamed block (see #orphanedToolCompletions).
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 new file mode 100644
-index 000000000..d137d49b8
+index 0000000..d137d49
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 @@ -0,0 +1,101 @@
@@ -164,7 +164,7 @@ index 000000000..d137d49b8
 +});
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 new file mode 100644
-index 000000000..4a2b7b85a
+index 0000000..4a2b7b8
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 @@ -0,0 +1,121 @@

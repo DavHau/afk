@@ -14,35 +14,10 @@ What must survive a rebase:
   structured-subagent.ts (runStructuredSubagent), not task/index.ts or
   eval/agent-bridge.ts.
 - Apply order: this patch precedes omp-jj-workspace-handle.patch.
+- Since 17.2.1 the eval isolation tests live in
+  test/eval/agent-bridge-policy.test.ts (moved out of
+  src/eval/__tests__/agent-bridge.test.ts).
 
-diff --git a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
-index 79954f8..d01261c 100644
---- a/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
-+++ b/packages/coding-agent/src/eval/__tests__/agent-bridge.test.ts
-@@ -14,6 +14,7 @@ import * as taskExecutor from "../../task/executor";
- import * as isolationRunner from "../../task/isolation-runner";
- import { AgentOutputManager } from "../../task/output-manager";
- import type { AgentDefinition, AgentProgress, SingleResult, StructuredSubagentOutput } from "../../task/types";
-+import { GitCheckoutHandle } from "../../task/vcs";
- import type { ToolSession } from "../../tools";
- import { runEvalAgent } from "../agent-bridge";
- import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
-@@ -1012,6 +1013,7 @@ describe("runEvalAgent isolation", () => {
- 	function mockIsolationContext(): { repoRoot: string } {
- 		const repoRoot = "/repo-root";
- 		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
-+			vcs: new GitCheckoutHandle(repoRoot),
- 			repoRoot,
- 			baseline: {
- 				root: { repoRoot, headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" },
-@@ -1153,6 +1155,7 @@ describe("runEvalAgent isolation", () => {
- 		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
- 			ops.push("prepare");
- 			return {
-+				vcs: new GitCheckoutHandle("/repo-root"),
- 				repoRoot: "/repo-root",
- 				baseline: {
- 					root: {
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
 index 781ea64..da211e3 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
@@ -233,10 +208,10 @@ index 781ea64..da211e3 100644
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch {
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index 1685aac..be9360d 100644
+index 0726a10..7023d6a 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -580,7 +580,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -589,7 +589,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		) {
  			const outcome = await mergeIsolatedChanges({
  				result,
@@ -245,7 +220,7 @@ index 1685aac..be9360d 100644
  				mergeMode: policy.mergeMode,
  			});
  			mergeSummary = outcome.summary;
-@@ -588,7 +588,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -597,7 +597,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  			if (outcome.changesApplied !== false) {
  				const nestedPatchSummary = await applyEligibleNestedPatches({
  					result,
@@ -403,6 +378,34 @@ index 0000000..d1949eb
 +	const root = await getRepoRoot(cwd);
 +	return new GitCheckoutHandle(root);
 +}
+diff --git a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
+index 65f27e4..f37f6c1 100644
+--- a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
++++ b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
+@@ -20,6 +20,7 @@ import * as taskExecutor from "../../src/task/executor";
+ import * as isolationRunner from "../../src/task/isolation-runner";
+ import { AgentOutputManager } from "../../src/task/output-manager";
+ import type { AgentDefinition, AgentProgress, SingleResult, StructuredSubagentOutput } from "../../src/task/types";
++import { GitCheckoutHandle } from "../../src/task/vcs";
+ import type { ToolSession } from "../../src/tools";
+ 
+ const taskAgent = {
+@@ -1012,6 +1013,7 @@ describe("runEvalAgent isolation", () => {
+ 	function mockIsolationContext(): { repoRoot: string } {
+ 		const repoRoot = "/repo-root";
+ 		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
++			vcs: new GitCheckoutHandle(repoRoot),
+ 			repoRoot,
+ 			baseline: {
+ 				root: { repoRoot, headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" },
+@@ -1153,6 +1155,7 @@ describe("runEvalAgent isolation", () => {
+ 		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
+ 			ops.push("prepare");
+ 			return {
++				vcs: new GitCheckoutHandle("/repo-root"),
+ 				repoRoot: "/repo-root",
+ 				baseline: {
+ 					root: {
 diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
 index 6a9a3c2..b214fea 100644
 --- a/packages/coding-agent/test/task/isolation-runner.test.ts
