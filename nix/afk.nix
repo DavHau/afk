@@ -95,6 +95,14 @@ let
       ln -sf ${../profile/rules/jj-basics.md} "$config_dir/rules/jj-basics.md"
       # The always-applied merge protocol for isolated-subagent task refs.
       ln -sf ${../profile/rules/isolated-task-merge.md} "$config_dir/rules/isolated-task-merge.md"
+      # Nix/direnv facts about the environment afk itself sets up: devshells
+      # are pre-applied by direnv.ts, missing programs come from `nix shell`,
+      # and `find /nix/store` is never an option.
+      ln -sf ${../profile/rules/afk-devshells.md} "$config_dir/rules/afk-devshells.md"
+      ln -sf ${../profile/rules/afk-unavailable-programs.md} "$config_dir/rules/afk-unavailable-programs.md"
+      ln -sf ${../profile/rules/afk-nix-store.md} "$config_dir/rules/afk-nix-store.md"
+      # Read dependency sources out of ~/projects instead of guessing.
+      ln -sf ${../profile/rules/afk-dependency-sources.md} "$config_dir/rules/afk-dependency-sources.md"
       # The superpowers bootstrap injector — skills never fire without it.
       ln -sf ${../extensions/superpowers.ts} "$config_dir/extensions/superpowers.ts"
       # direnv auto-load: applies `direnv export json` to the agent process.
