@@ -1,0 +1,52 @@
+afk: brainstorming blocks its todo phase for the duration of the dialogue.
+
+Motivation: the harness sends a stop-time reminder whenever an assistant
+turn ends with pending/in_progress todos (omp
+packages/coding-agent/src/session/todo-tracker.ts, checkCompletion), plus
+a mid-run nudge after 12 mutating tool calls (takeMidRunNudge). This
+skill mandates a task per checklist item AND one question per message,
+so every brainstorming turn trips it: the agent gets nudged toward
+execution in the middle of a design conversation.
+
+`blocked` is the existing, documented state for "open but waiting on
+external input", and both reminder paths filter to pending/in_progress
+only, so blocking the phase suppresses them without disabling reminders
+globally or touching omp. A forgotten unblock cannot strand the list:
+writing-plans opens with a fresh `todo init`, which replaces the phases
+outright.
+
+What must survive a rebase:
+- The block instruction sits with the checklist preamble, so it runs
+  before the first turn that can end with open todos.
+- Checklist item 9 (transition to implementation) unblocks before
+  handing off to writing-plans.
+
+--- a/skills/brainstorming/SKILL.md
++++ b/skills/brainstorming/SKILL.md
+@@ -19,7 +19,16 @@
+ 
+ ## Checklist
+ 
+-You MUST create a task for each of these items and complete them in order:
++You MUST create a task for each of these items and complete them in order.
++
++**Immediately after creating that task list, block the phase:** call the todo
++tool with `op: "block"`, `phase: "<the phase you just created>"`, and
++`reason: "brainstorming: awaiting user input"`. Brainstorming is a dialogue —
++every question, every approval gate ends your turn with open todos, and the
++harness reads that as abandoned work and nudges you back toward execution
++mid-conversation. Blocked tasks are open but excluded from that reminder, which
++is exactly the state a brainstorm is in: waiting on external input. Unblock at
++step 9, before you hand off to writing-plans.
+ 
+ 1. **Explore project context** — check files, docs, recent commits
+ 2. **Offer the visual companion just-in-time** — NOT upfront. The first time a question would genuinely be clearer shown than described, offer it then (its own message); on approval its browser tab opens for you. If no visual question ever arises, never offer it. See the Visual Companion section below.
+@@ -29,7 +38,7 @@
+ 6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
+ 7. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
+ 8. **User reviews written spec** — ask user to review the spec file before proceeding
+-9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
++9. **Transition to implementation** — unblock the phase (todo tool, `op: "unblock"`, same `phase`), then invoke writing-plans skill to create implementation plan
+ 
+ ## Process Flow
+ 
