@@ -13,7 +13,7 @@ What must survive a rebase:
   files at other revisions; never create worktrees, never move HEAD.
 
 diff --git a/skills/requesting-code-review/SKILL.md b/skills/requesting-code-review/SKILL.md
-index 4b8aa60..3b88e5b 100644
+index fa4f2f9..9c98ad2 100644
 --- a/skills/requesting-code-review/SKILL.md
 +++ b/skills/requesting-code-review/SKILL.md
 @@ -31,7 +31,7 @@ HEAD_SHA=$(git rev-parse HEAD)

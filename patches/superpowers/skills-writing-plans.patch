@@ -20,7 +20,7 @@ What must survive a rebase:
 - Dropped on purpose: the worktree provisioning context line.
 
 diff --git a/skills/writing-plans/SKILL.md b/skills/writing-plans/SKILL.md
-index b1613eb..4708791 100644
+index dd2702b..63f514a 100644
 --- a/skills/writing-plans/SKILL.md
 +++ b/skills/writing-plans/SKILL.md
 @@ -7,14 +7,12 @@ description: Use when you have a spec or requirements for a multi-step task, bef
@@ -93,16 +93,7 @@ index b1613eb..4708791 100644
  ````
  
  ## No Placeholders
-@@ -139,7 +147,7 @@ Every step must contain the actual content an engineer needs. These are **plan f
- - Exact file paths always
- - Complete code in every step — if a step changes code, show the code
- - Exact commands with expected output
--- DRY, YAGNI, TDD, frequent commits
-+- DRY, YAGNI, TDD
- 
- ## Self-Review
- 
-@@ -151,6 +159,8 @@ After writing the complete plan, look at the spec with fresh eyes and check the
+@@ -145,6 +153,8 @@ After writing the complete plan, look at the spec with fresh eyes and check the
  
  **3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
  
@@ -111,7 +102,7 @@ index b1613eb..4708791 100644
  If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
  
  ## Execution Handoff
-@@ -159,7 +169,7 @@ After saving the plan, offer execution choice:
+@@ -153,7 +163,7 @@ After saving the plan, offer execution choice:
  
  **"Plan complete and saved to `docs/superpowers/plans/<filename>.md`. Two execution options:**
  
@@ -120,7 +111,7 @@ index b1613eb..4708791 100644
  
  **2. Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
  
-@@ -167,7 +177,7 @@ After saving the plan, offer execution choice:
+@@ -161,7 +171,7 @@ After saving the plan, offer execution choice:
  
  **If Subagent-Driven chosen:**
  - **REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development
