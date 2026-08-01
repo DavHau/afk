@@ -15,9 +15,9 @@ schema defaults). Precedence becomes:
   schema defaults < distro defaults < global < project < overlays < runtime
 
 so the distribution ships opinionated defaults while every user-level
-write persists normally and overrides them. Loading is lenient
-(#loadYamlIfPresent): a missing or malformed distro file degrades to {}
-with a logged warning instead of bricking the binary.
+write persists normally and overrides them. Loading is lenient: a
+missing or malformed distro file degrades to {} with a logged warning
+instead of bricking the binary.
 
 What must survive a rebase:
 - #distro merged as the LOWEST config layer in #rebuildMerged (user
@@ -26,13 +26,17 @@ What must survive a rebase:
   it (reloadForCwd only reloads the project layer and re-merges, so it
   needs no change).
 - The distro file goes through #loadYamlIfPresent and therefore
-  #migrateRawSettings, same as the global config.
+  #migrateRawSettings, same as the global config. #loadYamlIfPresent
+  returns a TAGGED YamlLoadResult (since 17.2.1), not RawSettings:
+  unwrap `kind === "loaded"` explicitly. Treating the result as a plain
+  object merges `{kind, settings}` as junk keys and the whole layer
+  silently vanishes — which takes skills.customDirectories, and with it
+  the entire Superpowers library, down with it (tests/distro-config.test.ts).
 
 diff --git a/packages/coding-agent/src/config/settings.ts b/packages/coding-agent/src/config/settings.ts
-index fe10e86..a10d076 100644
 --- a/packages/coding-agent/src/config/settings.ts
 +++ b/packages/coding-agent/src/config/settings.ts
-@@ -325,6 +325,8 @@ export class Settings {
+@@ -325,6 +325,8 @@
  	#storage: AgentStorage | null = null;
  
  	#configFiles: string[] = [];
@@ -41,7 +45,7 @@ index fe10e86..a10d076 100644
  	/** Global settings from config.yml/config.yaml */
  	#global: RawSettings = {};
  	/** Project settings from .claude/settings.yml etc */
-@@ -608,6 +610,7 @@ export class Settings {
+@@ -608,6 +610,7 @@
  		});
  		cloned.#storage = this.#storage;
  		cloned.#configPath = this.#configPath;
@@ -49,7 +53,7 @@ index fe10e86..a10d076 100644
  		cloned.#global = structuredClone(this.#global);
  		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
  		if (!this.#persist) cloned.#projectShellPathSource = this.#projectShellPathSource;
-@@ -1045,6 +1048,7 @@ export class Settings {
+@@ -1045,6 +1048,7 @@
  		if (globalResult.status === "rejected") throw globalResult.reason;
  		if (projectResult.status === "rejected") throw projectResult.reason;
  
@@ -57,7 +61,7 @@ index fe10e86..a10d076 100644
  		this.#project = projectResult.value;
  		this.#configOverlay = await this.#loadConfigOverlays();
  
-@@ -1076,6 +1080,7 @@ export class Settings {
+@@ -1076,6 +1080,7 @@
  			this.#global = globalResult.value;
  		}
  
@@ -65,26 +69,38 @@ index fe10e86..a10d076 100644
  		this.#project = projectResult.value;
  		this.#configOverlay = await this.#loadConfigOverlays();
  		this.#rebuildMerged();
-@@ -1262,6 +1267,18 @@ export class Settings {
- 		return merged;
+@@ -1263,6 +1268,30 @@
  	}
  
-+	/**
+ 	/**
 +	 * Lenient loader for distribution defaults ($OMP_DISTRO_CONFIG): merged
 +	 * below the global config so user settings always win. A missing or
 +	 * malformed file degrades to {} with a logged warning, never an error —
-+	 * a broken distribution file must not brick the binary.
++	 * a broken distribution file must not brick the binary. The tagged
++	 * YamlLoadResult is unwrapped here rather than through
++	 * #unwrapYamlLoadResult, which throws on invalid/unreadable, and never
++	 * through the write-locked path: the distribution file is read-only.
 +	 */
 +	async #loadDistroDefaults(): Promise<RawSettings> {
-+		const filePath = process.env.OMP_DISTRO_CONFIG?.trim();
-+		if (!filePath) return {};
-+		return (await this.#loadYamlIfPresent(path.resolve(expandTilde(filePath)))) ?? {};
++		const raw = process.env.OMP_DISTRO_CONFIG?.trim();
++		if (!raw) return {};
++		const filePath = path.resolve(expandTilde(raw));
++		const result = await this.#loadYamlIfPresent(filePath);
++		if (result.kind === "loaded") return result.settings;
++		if (result.kind !== "missing") {
++			logger.warn("Settings: ignoring distribution defaults", {
++				path: filePath,
++				error: String(result.error),
++			});
++		}
++		return {};
 +	}
 +
- 	/**
++	/**
  	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
  	 * missing or malformed files are hard errors so a typo'd path cannot
-@@ -2141,7 +2158,7 @@ export class Settings {
+ 	 * silently fall back to the persistent settings.
+@@ -2141,7 +2170,7 @@
  	}
  
  	#rebuildMerged(): void {
