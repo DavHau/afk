@@ -18,6 +18,8 @@ What must survive a rebase:
 - Execution handoff describes option 1 as parallel isolated subagents
   per Dependency Map wave.
 - Dropped on purpose: the worktree provisioning context line.
+- Document-reviewer template dispatches the `reviewer` agent (task
+  tool), never `general-purpose` — no such agent exists here.
 
 diff --git a/skills/writing-plans/SKILL.md b/skills/writing-plans/SKILL.md
 index dd2702b..63f514a 100644
@@ -120,3 +122,13 @@ index dd2702b..63f514a 100644
  
  **If Inline Execution chosen:**
  - **REQUIRED SUB-SKILL:** Use superpowers:executing-plans
+diff --git a/skills/writing-plans/plan-document-reviewer-prompt.md b/skills/writing-plans/plan-document-reviewer-prompt.md
+@@ -7,7 +7,7 @@
+ **Dispatch after:** The complete plan is written.
+ 
+ ```
+-Subagent (general-purpose):
++Subagent (task tool, agent: reviewer):
+   description: "Review plan document"
+   prompt: |
+     You are a plan document reviewer. Verify this plan is complete and ready for implementation.

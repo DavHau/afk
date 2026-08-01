@@ -20,6 +20,8 @@ What must survive a rebase:
   before the first turn that can end with open todos.
 - Checklist item 9 (transition to implementation) unblocks before
   handing off to writing-plans.
+- Document-reviewer template dispatches the `reviewer` agent (task
+  tool), never `general-purpose` — no such agent exists here.
 
 diff --git a/skills/brainstorming/SKILL.md b/skills/brainstorming/SKILL.md
 index 789c3a1..fc5875f 100644
@@ -52,3 +54,13 @@ index 789c3a1..fc5875f 100644
  
  ## Process Flow
  
+diff --git a/skills/brainstorming/spec-document-reviewer-prompt.md b/skills/brainstorming/spec-document-reviewer-prompt.md
+@@ -7,7 +7,7 @@
+ **Dispatch after:** Spec document is written to docs/superpowers/specs/
+ 
+ ```
+-Subagent (general-purpose):
++Subagent (task tool, agent: reviewer):
+   description: "Review spec document"
+   prompt: |
+     You are a spec document reviewer. Verify this spec is complete and ready for planning.

@@ -1,0 +1,286 @@
+afk: finishing means a described jj stack, not a merged branch.
+
+Motivation: upstream's flow is `git checkout <base>` + `git merge` +
+`git branch -d` + worktree teardown. This repo is jj-colocated and has
+no worktrees (see skills-using-git-worktrees.patch), so those commands
+move HEAD out from under the jj working copy and desync the working
+copy — the failure mode is silent and expensive. Integration here is
+`jj bookmark set` + `jj git push`; the pre-flight that actually matters
+is `git for-each-ref refs/omp/task`, because isolated subagents' parked
+work is invisible to `jj log` and finishing over it ships a subset.
+
+What must survive a rebase:
+- Explicit ban on git checkout/merge/branch -d/pull/worktree remove,
+  with the colocation reason; read-only git plumbing stays allowed.
+- Step 2 = parked-ref check (`git for-each-ref refs/omp/task`) pointing
+  at the isolated-task-merge rule / merging-parked-task-refs skill, and
+  re-running the suite after adopting refs.
+- Step 3 = describe the stack (`jj log -r 'trunk()..@'`); undescribed
+  `@` is unfinished.
+- 3-option menu re-expressed as bookmark operations (land on trunk /
+  feature bookmark + PR / keep local); discard = `jj abandon`, still
+  gated on the typed word `discard`, with op-log recovery named.
+- Dropped on purpose: Step 2 environment detection (GIT_DIR vs
+  GIT_COMMON), the detached-HEAD 2-option menu, and Step 6 workspace
+  cleanup — all worktree-only concepts.
+- Upstream restructures can be discarded wholesale; regenerate this
+  patch as a full-body replacement.
+
+diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a-development-branch/SKILL.md
+@@ -7,9 +7,24 @@
+ 
+ ## Overview
+ 
+-**Core principle:** Verify tests → Detect environment → Present options → Execute choice → Clean up.
++There is no feature branch to merge and no worktree to dismantle on this
++harness. Work lands as a stack of described jj changes on `@` in the one
++checkout; isolated subagents park theirs on `refs/omp/task/<id>` until the
++orchestrator cherry-picks them. "Finishing" therefore means: green suite,
++nothing left parked, every change described, and your human partner's call
++on publishing.
++
++**Core principle:** Verify tests → Verify nothing is parked → Describe the
++stack → Present options → Execute choice.
+ 
+ **Announce at start:** "I'm using the finishing-a-development-branch skill to complete this work."
++
++**NEVER run `git checkout`, `git merge`, `git branch -d/-D`, `git pull`, or
++`git worktree remove` here.** This repo is jj-colocated: those commands move
++HEAD or delete refs out from under the jj working copy, and the resulting
++divergence is the expensive kind to undo. Integration is `jj` bookmarks and
++`jj git push`; read-only git plumbing (`show`, `diff`, `log`, `for-each-ref`)
++stays fine.
+ 
+ ## Step 1: Verify Tests
+ 
+@@ -25,52 +40,44 @@
+ 
+ **If tests pass:** continue to Step 2.
+ 
+-## Step 2: Detect Environment
++## Step 2: Verify Nothing Is Parked
+ 
+ ```bash
+-GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
+-GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
+-# Capture now, while still inside the workspace — Step 5 changes directory
+-# before cleanup (Step 6) needs this value
+-WORKTREE_PATH=$(git rev-parse --show-toplevel)
++git for-each-ref refs/omp/task
+ ```
+ 
+-This determines which menu to show and how cleanup works:
++Non-empty output means an isolated subagent's work never made it into the
++stack — it is invisible to `jj log`, and finishing over it silently ships a
++subset of the work. Adopt or discard every ref deliberately (see the
++always-applied `isolated-task-merge` rule and the
++`merging-parked-task-refs` skill), then re-run Step 1, before continuing.
+ 
+-| State | Menu | Cleanup |
+-|-------|------|---------|
+-| `GIT_DIR == GIT_COMMON` (normal repo) | Standard 3 options | No worktree to clean up |
+-| `GIT_DIR != GIT_COMMON`, named branch | Standard 3 options | Provenance-based (see Step 6) |
+-| `GIT_DIR != GIT_COMMON`, detached HEAD | Reduced 2 options (no merge) | Externally managed — leave in place |
++## Step 3: Describe the Stack
+ 
+-## Step 3: Determine Base Branch
++```bash
++jj st
++jj log -r 'trunk()..@'
++```
+ 
+-The base branch is whatever this work forked from — usually named in the
+-plan, the conversation, or the branch's upstream. If it is not already
+-known, ask: "This branch split from <your best guess> - is that correct?"
+-Confirm before merging: merging into the wrong base is expensive to undo.
++Every change in the stack carries a description; fixups are squashed into
++the change they fix, not left as separate commits. An undescribed `@` with
++changes is unfinished work, not a finished branch.
+ 
+ ## Step 4: Present Options
+ 
+-**Normal repo and named-branch worktree — present exactly these 3 options:**
++Determine what this stack forks from — `trunk()` unless the plan or the
++conversation says otherwise. If it is not already known, ask: "This stack
++splits from <your best guess> - is that correct?" Confirm before pushing:
++publishing onto the wrong base is expensive to undo.
++
++Present exactly these 3 options:
+ 
+ ```
+ Implementation complete. What would you like to do?
+ 
+-1. Merge back to <base-branch> locally
+-2. Push and create a Pull Request
+-3. Keep the branch as-is (I'll handle it later)
+-
+-Which option?
+-```
+-
+-**Detached HEAD — present exactly these 2 options:**
+-
+-```
+-Implementation complete. You're on a detached HEAD (externally managed workspace).
+-
+-1. Push as new branch and create a Pull Request
+-2. Keep as-is (I'll handle it later)
++1. Move <trunk-bookmark> to this stack and push it
++2. Push a feature bookmark and create a Pull Request
++3. Keep the stack local (I'll handle it later)
+ 
+ Which option?
+ ```
+@@ -83,51 +90,37 @@
+ 
+ ## Step 5: Execute Choice
+ 
+-### Option 1: Merge Locally
++### Option 1: Land on Trunk
+ 
+ ```bash
+-# Get main repo root for CWD safety
+-MAIN_ROOT=$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)
+-cd "$MAIN_ROOT"
+-
+-# Merge first — verify success before removing anything
+-git checkout <base-branch>
+-git pull
+-git merge <feature-branch>
+-
+-# Verify tests on merged result
+-<test command>
++jj bookmark set <trunk-bookmark> -r @
++jj git push --bookmark <trunk-bookmark>
+ ```
+ 
+-If tests fail on the merged result: stop, leave the worktree and branch in
+-place, and investigate — nothing has been pushed, so the merge is local
+-and recoverable.
++`jj` rebases nothing behind your back: if the push is rejected the remote
++moved, so `jj git fetch`, rebase the stack onto the new trunk, re-run the
++suite, and push again. Never force-push to resolve a rejection.
+ 
+-Once the merged result is green: clean up the worktree (Step 6), then
+-delete the branch:
++### Option 2: Push a Bookmark and Create a PR
+ 
+ ```bash
+-git branch -d <feature-branch>
++jj bookmark set <feature-name> -r @
++jj git push --bookmark <feature-name>
+ ```
+ 
+-### Option 2: Push and Create PR
++Then create the pull/merge request against the trunk bookmark with the
++forge's tooling — its CLI if one is available, or the creation URL most
++forges print when you push — following the repo's PR template and
++conventions if present, and report the URL to your human partner.
+ 
+-```bash
+-git push -u origin <feature-branch>
+-# From a detached HEAD, name the new branch on the remote:
+-# git push origin HEAD:refs/heads/<new-branch>
+-```
+-
+-Then create the pull/merge request against <base-branch> with the forge's
+-tooling — its CLI if one is available, or the creation URL most forges
+-print when you push — following the repo's PR template and conventions if
+-present, and report the URL to your human partner.
+-
+-Keep the worktree — your human partner iterates on PR feedback there.
++The stack stays checked out: PR feedback gets fixed right here, with
++`jj new` for follow-ups or `jj squash` to fold them into the change they
++belong to, then pushed again with the same command.
+ 
+ ### Option 3: Keep As-Is
+ 
+-Report: "Keeping branch <name>. Worktree preserved at <path>."
++Report: "Keeping the stack local. <N> described changes on top of
++<trunk-bookmark>, nothing pushed."
+ 
+ ### If your human partner asks to discard the work
+ 
+@@ -135,10 +128,8 @@
+ work away. Confirm first:
+ 
+ ```
+-This will permanently delete:
+-- Branch <name>
+-- All commits: <commit-list>
+-- Worktree at <path>
++This will abandon:
++- <N> changes: <change-list>
+ 
+ Type 'discard' to confirm.
+ ```
+@@ -146,56 +137,30 @@
+ Wait for that exact confirmation. When it arrives:
+ 
+ ```bash
+-MAIN_ROOT=$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)
+-cd "$MAIN_ROOT"
++jj abandon <first-change>::@
+ ```
+ 
+-Then clean up the worktree (Step 6) and force-delete the branch:
+-
+-```bash
+-git branch -D <feature-branch>
+-```
+-
+-## Step 6: Cleanup Workspace
+-
+-**Runs for Option 1 and confirmed discards.** Options 2 and 3 always
+-preserve the worktree. Both callers have already changed directory to the
+-main repo root — worktree removal must run from outside the worktree —
+-and use the `GIT_DIR`/`GIT_COMMON`/`WORKTREE_PATH` values captured in
+-Step 2, from before that directory change.
+-
+-**If `GIT_DIR == GIT_COMMON`:** Normal repo, no worktree to clean up. Done.
+-
+-**If `WORKTREE_PATH` is under `.worktrees/` or `worktrees/`:** Superpowers
+-created this worktree — we own cleanup:
+-
+-```bash
+-git worktree remove "$WORKTREE_PATH"
+-git worktree prune  # Self-healing: clean up any stale registrations
+-```
+-
+-**Otherwise:** The host environment owns this workspace — leave it in
+-place. If your platform provides a workspace-exit tool, use it.
++There is no workspace to tear down afterwards. The operation is recoverable
++from the op log (`jj op log`, `jj op restore <id>`) — say so when reporting.
+ 
+ ## Quick Reference
+ 
+-| Option | Merge | Push | Keep Worktree | Cleanup Branch |
+-|--------|-------|------|---------------|----------------|
+-| 1. Merge locally | yes | - | - | yes |
+-| 2. Create PR | - | yes | yes | - |
+-| 3. Keep as-is | - | - | yes | - |
+-| Discard (explicit request only) | - | - | - | yes (force) |
++| Option | Bookmark moved | Push | Stack kept |
++|--------|----------------|------|------------|
++| 1. Land on trunk | trunk | yes | yes (now trunk) |
++| 2. Create PR | feature | yes | yes |
++| 3. Keep as-is | - | - | yes |
++| Discard (explicit request only) | - | - | abandoned |
+ 
+ ## Common Rationalizations
+ 
+ | Excuse | Reality |
+ |--------|---------|
+-| "Tests passed earlier this session" | Run the suite on the tree you are about to integrate. A green run only proves the tree it ran on. |
++| "Tests passed earlier this session" | Run the suite on the tree you are about to publish. A green run only proves the tree it ran on. |
+ | "They obviously want it merged" | Integration is your human partner's decision. Present the menu and wait. |
+ | "They seem done with this feature — I'll offer to discard it" | The menu is complete as written. Discard happens only when your human partner asks for it in so many words. |
+ | "'Yeah, get rid of it' counts as confirmation" | Only the typed word `discard` authorizes deletion. |
+-| "The PR is up, so the worktree is clutter now" | PR feedback gets fixed in that worktree. It stays until the work lands. |
+-| "This other worktree looks stale — I'll clean it too" | Clean up only worktrees under `.worktrees/` or `worktrees/`. Everything else belongs to the host. |
+-| "The merged-result failure is probably flaky" | A failing merged result stops everything. Branch and worktree stay put while you investigate. |
+-| "The base branch is obviously main" | Confirm the fork point or ask. Merging into the wrong base is expensive to undo. |
+-| "The push was rejected — force-push will fix it" | A rejected push means the remote moved. Investigate; force-push only on your human partner's explicit request. |
++| "`jj log` is clean, so everything landed" | Parked task refs are invisible to jj. `git for-each-ref refs/omp/task` is the only check that sees them. |
++| "One quick `git checkout` to look at the base" | It moves HEAD under the jj working copy. `git show <rev>:path` and `jj diff -r <rev>` read other revisions without moving anything. |
++| "The trunk bookmark is obviously main" | Confirm the base or ask. Publishing onto the wrong base is expensive to undo. |
++| "The push was rejected — force-push will fix it" | A rejected push means the remote moved. Fetch, rebase, re-test; force-push only on your human partner's explicit request. |
