@@ -21,12 +21,21 @@ let
       # pre-configures everything the wizard would ask about.
       setupWizard: false
     modelRoles:
-      # Distribution default model. Only the `default` role is pinned: omp's
-      # `task` role inherits this model for subagents (it does NOT inherit the
-      # thinking suffix), so per-agent cost stays tunable through frontmatter
-      # `model:` / task.agentModelOverrides instead of a second hard pin here.
-      # Users override this in their own config.yml, which layers above this.
+      # Distribution default model. Users override this in their own
+      # config.yml, which layers above this.
       default: anthropic/claude-opus-5:low
+      # `@task` is the one role with no inheritance path: it is absent from
+      # both the priority chains and shouldInheritDefaultBeforePriority
+      # (smol/slow/designer), so it resolves to nothing and the spawn falls
+      # back to the parent's bare model string — model without the `:level`
+      # suffix. With no explicit level the bundled `task` agent's `auto`
+      # frontmatter wins, and auto provisions `high`, so a low-effort parent
+      # still spawned high-effort subagents. `@default:<level>` re-attaches a
+      # level without pinning a second model: the alias expands to the
+      # `default` role's pattern and the trailing suffix overrides its own
+      # (`...:low:medium` -> medium). Agents that declare their own
+      # `thinking-level` and per-spawn effort hints still take precedence.
+      task: "@default:medium"
     skills:
       # The full Superpowers library (afk-skills package output is the skills
       # root) plus the distribution's own skills. Discovered skills reach every

@@ -34,9 +34,17 @@ optionally with a thinking suffix (`"@slow:high"`, `gpt-5.3-codex:medium`).
 | `advisor` | advisor/watchdog pass |
 
 Fallbacks: unset `tiny` → `smol` chain, unset `advisor` → `slow` chain
-(`ROLE_PRIORITY_ALIAS`, `model-resolver.ts`). Other unset roles fall back to
-their built-in priority list, ultimately the active model. A role may point at
-another role; an explicit thinking suffix on the referring role wins.
+(`ROLE_PRIORITY_ALIAS`, `model-resolver.ts`). Unset `smol`/`slow`/`designer`
+inherit the `default` role *including its thinking suffix*
+(`shouldInheritDefaultBeforePriority`). Other unset roles fall back to their
+built-in priority list, ultimately the active model. A role may point at
+another role; an explicit thinking suffix on the referring role wins
+(`@default:medium` → `provider/id:low:medium` → medium).
+
+`task` is the outlier: no priority chain and no default inheritance, so an
+unset `task` role resolves to nothing and the spawn falls back to the parent's
+**bare** model string (`formatModelString`, suffix stripped). See the thinking
+level section below.
 
 ## Layer 2: agent types
 
@@ -68,6 +76,22 @@ Effective model precedence (`resolveEffectiveSubagentPolicy`):
 1. `task.agentModelOverrides[<agentName>]` — per-agent pin, beats frontmatter
 2. agent frontmatter `model:` (the `@role` alias)
 3. parent session model
+
+Effective thinking level precedence (`executor.ts`, `effectiveThinkingLevel`):
+
+1. per-spawn `effort: lo|med|hi` — only exposed when `task.enableEffort` is on
+   (default off), then clamped by `task.maxEffort`
+2. `:level` suffix on the resolved model pattern (role or
+   `task.agentModelOverrides` value)
+3. agent frontmatter `thinking-level:`
+4. model `defaultLevel`, then the global `defaultThinkingLevel` setting
+   (**ships as `high`**)
+
+The parent session's level is *not* in this list — it never propagates.
+Combined with the `@task` hole above, an unset `task` role meant every default
+subagent ran the bundled agent's `auto` frontmatter, which provisions `high`,
+regardless of the parent. The distro therefore pins
+`modelRoles.task: "@default:medium"` (`nix/afk.nix`).
 
 Output schema precedence: task item `outputSchema` → frontmatter `output` →
 parent session schema.
