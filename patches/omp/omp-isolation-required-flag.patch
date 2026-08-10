@@ -36,29 +36,29 @@ What must survive a rebase:
   isolation is off.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index ebc4d41..6f8b64b 100644
+index 4538a05a9..688801b42 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -26,7 +26,7 @@
  
  ## Inputs
  
--The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
-+The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated }` (`isolated` exists — and is required — only when `task.isolation.mode` is not `none`):
+-The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated? }`. `isolated` exists only when `task.isolation.mode` is not `none` **and plan mode is disabled**; `effort` exists only when `task.enableEffort=true` (default off).
++The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated }`. `isolated` exists — and is then required — only when `task.isolation.mode` is not `none` **and plan mode is disabled**; `effort` exists only when `task.enableEffort=true` (default off).
  
- - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `effort`, `outputSchema`, `schemaMode`, and `isolated` are per item, so one call may mix agent types and output contracts.
+ - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `outputSchema`, and `schemaMode` are per item. `effort` is added only when its setting enables it; `isolated` additionally requires plan mode to be disabled.
  - **Flat shape** (`task.batch` off): `{ ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each spawn's `task` references; subagents share the parent's `local://` root.
 @@ -41,7 +41,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
- | `effort` | `"lo" \| "med" \| "hi"` | No | Per-spawn thinking effort, mapped onto the resolved model's supported range (lowest/middle/highest level it tops out at, e.g. `high`/`xhigh`/`max`). Overrides the agent's default selector, including `auto`; omitting it keeps the agent's configured selector — automatic per-prompt classification only for agents configured `auto` (e.g. the bundled `task`); `scout`/`sonic` configure `medium`. Item field in batch shape, top-level in flat shape. |
- | `outputSchema` | JSON Schema object | No | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape. |
+ | `effort` | `"lo" \| "med" \| "hi"` | No | Present only with `task.enableEffort=true`. Per-spawn thinking effort, mapped onto the resolved model's supported range (lowest/middle/highest level it tops out at, e.g. `high`/`xhigh`/`max`). Overrides the agent's default selector, including `auto`; omitting it keeps the agent's configured selector — automatic per-prompt classification only for agents configured `auto` (e.g. the bundled `task`); `scout`/`sonic` configure `medium`. Item field in batch shape, top-level in flat shape. |
+ | `outputSchema` | JSON Schema (`object \| boolean \| string \| null` at the coarse wire-validation layer) | No | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape. |
  | `schemaMode` | `"permissive" \| "strict"` | No | Validation mode for the effective output schema. Overrides the parent session mode; defaults to `permissive`. Item field in batch shape, top-level in flat shape. |
--| `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
-+| `isolated` | `boolean` | Yes (when present) | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none`, and is then required — the caller must choose explicitly per spawn; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
+-| `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none` and plan mode is disabled; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
++| `isolated` | `boolean` | Yes (when present) | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none` and plan mode is disabled, and is then required — the caller must choose explicitly per spawn; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
  
  There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
  
 diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
-index b5d8189..ea8691f 100644
+index 50ff4eb48..6d5c33fdb 100644
 --- a/packages/coding-agent/src/prompts/tools/task.md
 +++ b/packages/coding-agent/src/prompts/tools/task.md
 @@ -31,9 +31,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
@@ -86,7 +86,7 @@ index b5d8189..ea8691f 100644
  {{/if}}
  {{/if}}
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index d494908..8e0434a 100644
+index efaa901ce..711f9a95a 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
 @@ -125,7 +125,7 @@ const taskItemSchemaIsolated = type({
@@ -140,14 +140,24 @@ index d494908..8e0434a 100644
  		});
  	}
 diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
-index c51535c..d27ead5 100644
+index c2372bb35..a4c461e8a 100644
 --- a/packages/coding-agent/test/task/task-batch.test.ts
 +++ b/packages/coding-agent/test/task/task-batch.test.ts
-@@ -180,7 +180,30 @@ describe("task.batch schema gating", () => {
- 				},
- 			}),
- 		);
--		expect(captureTool.description).toContain("without modifying the parent checkout");
+@@ -169,6 +169,41 @@ describe("task.batch schema gating", () => {
+ 		}
+ 		expect(isolatedSchema.type).toBe("boolean");
+ 		expect(itemProperties.apply).toBeUndefined();
++		expect(tool.description).toContain("automatically applied to the parent checkout");
++
++		const captureTool = await TaskTool.create(
++			createSession({
++				settings: {
++					"task.batch": true,
++					"task.isolation.mode": "auto",
++					"task.isolation.apply": false,
++				},
++			}),
++		);
 +		expect(captureTool.description).toContain("never touching your worktree");
 +	});
 +
@@ -176,10 +186,10 @@ index c51535c..d27ead5 100644
  
  	it("hides isolation from the dynamic batch schema in plan mode", async () => {
 diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
-index fed78ad..6966992 100644
+index b9ddd7347..09b8df145 100644
 --- a/packages/coding-agent/test/task/task-schema.test.ts
 +++ b/packages/coding-agent/test/task/task-schema.test.ts
-@@ -13,12 +13,12 @@ import { type } from "arktype";
+@@ -13,12 +13,12 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
  
  describe("task schema (single-spawn)", () => {
  	it("accepts {agent, task}", () => {
@@ -203,12 +213,12 @@ index fed78ad..6966992 100644
  			context: "shared background",
  			tasks: [{ name: "A", task: "..." }],
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index 176abbd..da61ee7 100644
+index 8f81f6861..f08830a35 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
-@@ -6,9 +6,10 @@ import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/type
+@@ -6,9 +6,10 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+ import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/types";
  import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
- import { type } from "arktype";
  
 -// Contract: the task tool's wire shape is flat `{ name?, agent?, task, isolated? }`
 -// (batch: `{ context, tasks[] }` of the same items). `agent` defaults to the

@@ -14,7 +14,7 @@ What must survive a rebase:
   prescribed) rather than the exact wording.
 
 diff --git a/packages/coding-agent/src/prompts/system/commit-message-system.md b/packages/coding-agent/src/prompts/system/commit-message-system.md
-index 119a625..820e8d5 100644
+index 119a62528..820e8d55c 100644
 --- a/packages/coding-agent/src/prompts/system/commit-message-system.md
 +++ b/packages/coding-agent/src/prompts/system/commit-message-system.md
 @@ -1,4 +1,4 @@
@@ -24,7 +24,7 @@ index 119a625..820e8d5 100644
  Use conventional commit format: `type(scope): description`. Type is one of feat/fix/refactor/chore/test/docs. Scope is optional. The description MUST be lowercase, imperative mood, no trailing period. Keep the message under 72 characters.
  
 diff --git a/packages/coding-agent/src/prompts/system/orchestrate-notice.md b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
-index 4e61535..3471d88 100644
+index 4e615351c..3471d888b 100644
 --- a/packages/coding-agent/src/prompts/system/orchestrate-notice.md
 +++ b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
 @@ -19,7 +19,7 @@ You decompose, dispatch, verify, and iterate. Substantial and parallelizable wor
@@ -37,7 +37,7 @@ index 4e61535..3471d88 100644
  3. **Dispatch phase.** Launch all parallel `task` subagents in one message, then collect every result (async results / `hub` wait) before moving on.
  4. **Verify phase.** Run the gates. On failure, dispatch fix-up subagents and re-verify. Do not advance with a red gate.
 diff --git a/packages/coding-agent/src/prompts/system/plan-mode-active.md b/packages/coding-agent/src/prompts/system/plan-mode-active.md
-index fe1a1b8..50165ae 100644
+index de0c67980..b516813fe 100644
 --- a/packages/coding-agent/src/prompts/system/plan-mode-active.md
 +++ b/packages/coding-agent/src/prompts/system/plan-mode-active.md
 @@ -1,7 +1,7 @@
@@ -50,21 +50,21 @@ index fe1a1b8..50165ae 100644
  - You NEVER delete or rename `local://` artifacts.
  - You MUST write the canonical plan to `local://<slug>-plan.md`.
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index ef82a95..cec2ed9 100644
+index da50e4ea1..0dea508dd 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -217,7 +217,7 @@ EXECUTION WORKFLOW
+@@ -198,7 +198,7 @@ EXECUTION WORKFLOW
+ - Clean cutover: migrate every caller; remove obsolete code, comments, aliases, re-exports, and deprecated paths.
  - Prefer updating existing files over creating new ones.
  - Review changes from the user's perspective.
- {{#has tools "grep"}}- Grep instead of guessing.{{/has}}
--{{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- Don't run destructive git commands or delete code you didn't write.{{/has}}
-+{{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- Don't run destructive git/jj commands or delete code you didn't write.{{/has}}
+-{{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- NEVER run destructive git commands or delete code you didn't write.{{/has}}
++{{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- NEVER run destructive git/jj commands or delete code you didn't write.{{/has}}
  
  # 5. Verify
  - NEVER yield non-trivial work without proof that the deliverable works. The proof method depends on the ask:
-@@ -285,5 +285,5 @@ Before declaring blocked:
- 
+@@ -259,5 +259,5 @@ Before declaring blocked:
  <critical>
+ - NEVER yield while actionable work remains. A phase boundary, todo flip, or sub-step is NEVER a stopping point—continue in the same turn.
  - NEVER narrate or consider session limits, token or tool budgets, effort estimates, or how much you can finish. Not your concern—start as if unbounded; execute or delegate.
 -- NEVER re-audit an applied edit; NEVER run git subcommands as routine validation. Tool results are THE verification.
 +- NEVER re-audit an applied edit; NEVER run git/jj subcommands as routine validation. Tool results are THE verification.

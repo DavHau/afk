@@ -19,16 +19,17 @@ What must survive a rebase:
   and the superpowers skill patches depend on that contract).
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 2f37537..a9255aa 100644
+index c206198d9..45e320f1e 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -109,13 +109,13 @@ Artifacts and side channels:
-   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `effort`, `outputSchema`, `schemaMode`, and `isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
-   - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema.
+@@ -112,14 +112,14 @@ Artifacts and side channels:
+   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `outputSchema`, and `schemaMode` per item. `effort` appears only when its setting enables it; `isolated` also requires plan mode to be disabled. Lifecycle, revival, and concurrency semantics match N parallel single calls.
+   - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Isolation mode (`task.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
 -- Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `omp/task/<id>`, cherry-pick into parent).
 +- Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command).
- - Agent source precedence: project custom agents, then user custom agents, then bundled agents (`scout`, `designer`, `reviewer`, `task`, `sonic`, `librarian`).
+ - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `designer`, `reviewer`, `security-reviewer`, `librarian`, `task`, `sonic`).
+ - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
  
  ## Side Effects
  - Filesystem
@@ -39,14 +40,14 @@ index 2f37537..a9255aa 100644
    - Child sessions may use whichever networked tools/models their active tool set permits.
    - MCP proxy tools can call existing parent MCP connections with a 60_000 ms timeout.
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index c6e0a58..781ea64 100644
+index 4d492bf90..abcd519bc 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -172,9 +172,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -189,9 +189,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  					nestedPatches: commitResult?.nestedPatches,
- 				};
+ 				});
  			} catch (mergeErr) {
--				// Agent succeeded but branch commit failed — clean up stale branch
+-				// Agent succeeded but branch commit failed — clean up stale branch.
 -				const branchName = `omp/task/${opts.agentId}`;
 -				await git.branch.tryDelete(opts.context.repoRoot, branchName);
 +				// Agent succeeded but branch commit failed — clean up stale task ref
@@ -55,7 +56,7 @@ index c6e0a58..781ea64 100644
  				try {
  					const patchResult = await writeIsolationPatch(
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index ecb26de..6329423 100644
+index ecb26de15..63294239e 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
 @@ -504,6 +504,34 @@ export interface CommitToBranchResult {
@@ -184,7 +185,7 @@ index ecb26de..6329423 100644
  	}
  }
 diff --git a/packages/coding-agent/src/utils/git.ts b/packages/coding-agent/src/utils/git.ts
-index 35342a7..837b022 100644
+index 35342a75e..837b0226a 100644
 --- a/packages/coding-agent/src/utils/git.ts
 +++ b/packages/coding-agent/src/utils/git.ts
 @@ -1866,6 +1866,16 @@ export const ref = {
@@ -206,7 +207,7 @@ index 35342a7..837b022 100644
  	async tags(cwd: string, refName = "HEAD", signal?: AbortSignal): Promise<string[]> {
 diff --git a/packages/coding-agent/test/task/worktree-jj-colocated.test.ts b/packages/coding-agent/test/task/worktree-jj-colocated.test.ts
 new file mode 100644
-index 0000000..c3d6460
+index 000000000..c3d646014
 --- /dev/null
 +++ b/packages/coding-agent/test/task/worktree-jj-colocated.test.ts
 @@ -0,0 +1,189 @@
@@ -400,7 +401,7 @@ index 0000000..c3d6460
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 4a38b21..1be2f9f 100644
+index 4a38b2109..1be2f9fd1 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -1299,4 +1299,82 @@ describe("commitToBranch preserves agent commits", () => {

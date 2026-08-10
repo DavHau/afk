@@ -19,14 +19,15 @@ What must survive a rebase:
   src/eval/__tests__/agent-bridge.test.ts).
 
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 781ea64..da211e3 100644
+index abcd519bc..83c45cc6c 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -22,42 +22,37 @@ import * as path from "node:path";
- import type * as natives from "@oh-my-pi/pi-natives";
+@@ -23,22 +23,15 @@ import type * as natives from "@oh-my-pi/pi-natives";
+ import { AgentRegistry } from "../registry/agent-registry";
  import type { ToolSession } from "../tools";
  import { generateCommitMessage } from "../utils/commit-message-generator";
 -import * as git from "../utils/git";
+ import { trackLateCleanup } from "../utils/late-cleanup";
  import type { ExecutorOptions } from "./executor";
  import { runSubprocess } from "./executor";
  import type { SingleResult } from "./types";
@@ -45,8 +46,9 @@ index 781ea64..da211e3 100644
  	type NestedRepoPatch,
  	type WorktreeBaseline,
  } from "./worktree";
- 
- type IsoBackendKind = natives.IsoBackendKind;
+@@ -54,21 +47,23 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
+ 	return result;
+ }
  
 -/** Resolved repo + baseline used by every isolated spawn in a single call. */
 +/** Resolved VCS handle + baseline used by every isolated spawn in a single call. */
@@ -75,7 +77,7 @@ index 781ea64..da211e3 100644
  }
  
  /** Build a commit-message callback for branch/nested commits; `undefined` ⇒ fall back to generic message. */
-@@ -116,12 +111,13 @@ export interface IsolatedRunOptions {
+@@ -127,12 +122,13 @@ export interface IsolatedRunOptions {
  }
  
  async function writeIsolationPatch(
@@ -90,10 +92,10 @@ index 781ea64..da211e3 100644
  	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
  	await Bun.write(patchPath, delta.rootPatch);
  	return { patchPath, nestedPatches: delta.nestedPatches };
-@@ -156,9 +152,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 			preloadedExtensionPaths: undefined,
- 			preloadedCustomToolPaths: undefined,
+@@ -173,9 +169,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+ 			},
  		});
+ 		if (deferredCleanup) return result;
 +		const vcs = opts.context.vcs;
  		if (opts.mergeMode === "branch" && result.exitCode === 0) {
  			try {
@@ -102,8 +104,8 @@ index 781ea64..da211e3 100644
  					isolationDir,
  					taskBaseline,
  					opts.agentId,
-@@ -173,10 +170,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 				};
+@@ -190,10 +187,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+ 				});
  			} catch (mergeErr) {
  				// Agent succeeded but branch commit failed — clean up stale task ref
 -				await cleanupTaskBranches(opts.context.repoRoot, [`omp/task/${opts.agentId}`]);
@@ -115,16 +117,16 @@ index 781ea64..da211e3 100644
  						isolationDir,
  						taskBaseline,
  						opts.artifactsDir,
-@@ -196,7 +194,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -216,7 +214,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		}
  		if (result.exitCode === 0) {
  			try {
 -				const patchResult = await writeIsolationPatch(isolationDir, taskBaseline, opts.artifactsDir, opts.agentId);
 +				const patchResult = await writeIsolationPatch(vcs, isolationDir, taskBaseline, opts.artifactsDir, opts.agentId);
- 				return {
+ 				return rememberAgentArtifacts({
  					...result,
  					patchPath: patchResult.patchPath,
-@@ -219,7 +217,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -250,7 +248,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  
  export interface IsolationMergeOptions {
  	result: SingleResult;
@@ -133,7 +135,7 @@ index 781ea64..da211e3 100644
  	mergeMode: "patch" | "branch";
  }
  
-@@ -247,7 +245,7 @@ export interface IsolationMergeOutcome {
+@@ -278,7 +276,7 @@ export interface IsolationMergeOutcome {
   * instead.
   */
  export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise<IsolationMergeOutcome> {
@@ -142,7 +144,7 @@ index 781ea64..da211e3 100644
  	try {
  		if (mergeMode === "branch") {
  			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
-@@ -271,7 +269,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -302,7 +300,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  					mergedBranchForNestedPatches: canApplyNestedOnly,
  				};
  			}
@@ -151,7 +153,7 @@ index 781ea64..da211e3 100644
  				{
  					branchName: result.branchName,
  					taskId: result.id,
-@@ -296,7 +294,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -327,7 +325,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  
  			// Clean up the merged branch (keep failed ones for manual resolution)
  			if (changesApplied) {
@@ -160,7 +162,7 @@ index 781ea64..da211e3 100644
  			}
  			return { summary, changesApplied, hadAnyChanges, mergedBranchForNestedPatches };
  		}
-@@ -328,8 +326,8 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -359,8 +357,8 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  				// `--3way --check`, which exits 0 even when the real apply would
  				// leave conflict markers and unmerged index entries.
  				const [alreadyApplied, forwardApplies] = await Promise.all([
@@ -171,7 +173,7 @@ index 781ea64..da211e3 100644
  				]);
  				hadAnyChanges = false;
  				if (alreadyApplied && !forwardApplies) {
-@@ -337,7 +335,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -368,7 +366,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  				} else if (forwardApplies) {
  					changesApplied = true;
  					try {
@@ -180,7 +182,7 @@ index 781ea64..da211e3 100644
  						hadAnyChanges = true;
  					} catch {
  						changesApplied = false;
-@@ -372,7 +370,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -403,7 +401,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  export interface NestedPatchApplyOptions {
  	/** Subagent result carrying `nestedPatches`/`exitCode`/`aborted`. */
  	result: SingleResult;
@@ -189,7 +191,7 @@ index 781ea64..da211e3 100644
  	mergeMode: "patch" | "branch";
  	/** Parent merge outcome — patch mode skips nested apply when this is `false`. */
  	changesApplied: boolean | null;
-@@ -392,7 +390,7 @@ export interface NestedPatchApplyOptions {
+@@ -423,7 +421,7 @@ export interface NestedPatchApplyOptions {
   * or an empty string when nothing was applied or the nested apply succeeded.
   */
  export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions): Promise<string> {
@@ -198,7 +200,7 @@ index 781ea64..da211e3 100644
  	if (mergeMode === "patch" && changesApplied === false) return "";
  	const nestedPatches = result.nestedPatches ?? [];
  	const eligible =
-@@ -402,7 +400,7 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
+@@ -433,7 +431,7 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
  		(mergeMode !== "branch" || mergedBranchForNestedPatches);
  	if (!eligible) return "";
  	try {
@@ -208,10 +210,10 @@ index 781ea64..da211e3 100644
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch {
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index 0726a10..7023d6a 100644
+index a1e29ffb3..c9895d96f 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -589,7 +589,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -604,7 +604,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		) {
  			const outcome = await mergeIsolatedChanges({
  				result,
@@ -220,7 +222,7 @@ index 0726a10..7023d6a 100644
  				mergeMode: policy.mergeMode,
  			});
  			mergeSummary = outcome.summary;
-@@ -597,7 +597,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -612,7 +612,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  			if (outcome.changesApplied !== false) {
  				const nestedPatchSummary = await applyEligibleNestedPatches({
  					result,
@@ -231,7 +233,7 @@ index 0726a10..7023d6a 100644
  					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
 diff --git a/packages/coding-agent/src/task/vcs.ts b/packages/coding-agent/src/task/vcs.ts
 new file mode 100644
-index 0000000..d1949eb
+index 000000000..d1949ebfe
 --- /dev/null
 +++ b/packages/coding-agent/src/task/vcs.ts
 @@ -0,0 +1,143 @@
@@ -379,7 +381,7 @@ index 0000000..d1949eb
 +	return new GitCheckoutHandle(root);
 +}
 diff --git a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
-index 65f27e4..f37f6c1 100644
+index 95036176c..4d148be05 100644
 --- a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 +++ b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 @@ -20,6 +20,7 @@ import * as taskExecutor from "../../src/task/executor";
@@ -390,7 +392,7 @@ index 65f27e4..f37f6c1 100644
  import type { ToolSession } from "../../src/tools";
  
  const taskAgent = {
-@@ -1012,6 +1013,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1101,6 +1102,7 @@ describe("runEvalAgent isolation", () => {
  	function mockIsolationContext(): { repoRoot: string } {
  		const repoRoot = "/repo-root";
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
@@ -398,7 +400,7 @@ index 65f27e4..f37f6c1 100644
  			repoRoot,
  			baseline: {
  				root: { repoRoot, headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" },
-@@ -1153,6 +1155,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1242,6 +1244,7 @@ describe("runEvalAgent isolation", () => {
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
  			ops.push("prepare");
  			return {
@@ -407,10 +409,10 @@ index 65f27e4..f37f6c1 100644
  				baseline: {
  					root: {
 diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
-index 6a9a3c2..b214fea 100644
+index 591d396ec..baff511bc 100644
 --- a/packages/coding-agent/test/task/isolation-runner.test.ts
 +++ b/packages/coding-agent/test/task/isolation-runner.test.ts
-@@ -9,6 +9,7 @@ import {
+@@ -10,6 +10,7 @@ import {
  	runIsolatedSubprocess,
  } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
  import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -418,7 +420,7 @@ index 6a9a3c2..b214fea 100644
  import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
  import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
  import * as natives from "@oh-my-pi/pi-natives";
-@@ -122,7 +123,7 @@ describe("runIsolatedSubprocess", () => {
+@@ -131,7 +132,7 @@ describe("runIsolatedSubprocess", () => {
  				index: 0,
  				id: "PreserveBranchFailure",
  			},
@@ -427,7 +429,15 @@ index 6a9a3c2..b214fea 100644
  			preferredBackend: undefined,
  			agentId: "PreserveBranchFailure",
  			mergeMode: "branch",
-@@ -150,7 +151,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -178,6 +179,7 @@ describe("runIsolatedSubprocess", () => {
+ 				id: "DeferredCleanup",
+ 			},
+ 			context: {
++				vcs: new GitCheckoutHandle("/repo"),
+ 				repoRoot: "/repo",
+ 				baseline: {
+ 					root: {
+@@ -217,7 +219,7 @@ describe("mergeIsolatedChanges", () => {
  	it("allows nested-only branch-mode patches to apply when no root branch was created", async () => {
  		const mergeSpy = vi.spyOn(worktreeModule, "mergeTaskBranches");
  		const outcome = await mergeIsolatedChanges({
@@ -436,7 +446,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "branch",
  			result: result({
  				nestedPatches: [{ relativePath: "nested", patch: "diff --git a/file b/file\n" }],
-@@ -167,7 +168,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -234,7 +236,7 @@ describe("mergeIsolatedChanges", () => {
  	it("surfaces branch preparation errors instead of reporting no changes", async () => {
  		const mergeSpy = vi.spyOn(worktreeModule, "mergeTaskBranches");
  		const outcome = await mergeIsolatedChanges({
@@ -445,7 +455,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "branch",
  			result: result({
  				error: "Merge failed: git apply --3way failed for task dirty-context: conflict",
-@@ -189,7 +190,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -256,7 +258,7 @@ describe("mergeIsolatedChanges", () => {
  		const { repoRoot, patchPath } = await seedFooRepo("new\n");
  
  		const outcome = await mergeIsolatedChanges({
@@ -454,7 +464,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "patch",
  			result: result({ patchPath }),
  		});
-@@ -203,7 +204,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -270,7 +272,7 @@ describe("mergeIsolatedChanges", () => {
  		const { repoRoot, patchPath } = await seedFooRepo("other\n");
  
  		const outcome = await mergeIsolatedChanges({
@@ -463,7 +473,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "patch",
  			result: result({ patchPath }),
  		});
-@@ -219,7 +220,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -286,7 +288,7 @@ describe("mergeIsolatedChanges", () => {
  		const { repoRoot, patchPath } = await seedFooRepo("old\n");
  
  		const outcome = await mergeIsolatedChanges({
@@ -472,7 +482,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "patch",
  			result: result({ patchPath }),
  		});
-@@ -238,7 +239,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -305,7 +307,7 @@ describe("mergeIsolatedChanges", () => {
  		const applySpy = vi.spyOn(gitModule.patch, "applyText").mockResolvedValue(undefined);
  
  		const outcome = await mergeIsolatedChanges({
@@ -481,7 +491,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "patch",
  			result: result({ patchPath }),
  		});
-@@ -251,7 +252,7 @@ describe("mergeIsolatedChanges", () => {
+@@ -318,7 +320,7 @@ describe("mergeIsolatedChanges", () => {
  
  	it("does not mark failed branch-mode runs as nested-patch eligible", async () => {
  		const outcome = await mergeIsolatedChanges({
@@ -490,7 +500,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "branch",
  			result: result({
  				exitCode: 1,
-@@ -276,7 +277,7 @@ describe("applyEligibleNestedPatches", () => {
+@@ -343,7 +345,7 @@ describe("applyEligibleNestedPatches", () => {
  		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches");
  		const suffix = await applyEligibleNestedPatches({
  			result: result({ nestedPatches: [nestedPatch] }),
@@ -499,7 +509,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "patch",
  			changesApplied: false,
  			mergedBranchForNestedPatches: false,
-@@ -289,7 +290,7 @@ describe("applyEligibleNestedPatches", () => {
+@@ -356,7 +358,7 @@ describe("applyEligibleNestedPatches", () => {
  		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches");
  		const suffix = await applyEligibleNestedPatches({
  			result: result({ nestedPatches: [nestedPatch] }),
@@ -508,7 +518,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "branch",
  			changesApplied: true,
  			mergedBranchForNestedPatches: false,
-@@ -302,7 +303,7 @@ describe("applyEligibleNestedPatches", () => {
+@@ -369,7 +371,7 @@ describe("applyEligibleNestedPatches", () => {
  		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches").mockResolvedValue([]);
  		const suffix = await applyEligibleNestedPatches({
  			result: result({ nestedPatches: [nestedPatch] }),
@@ -517,7 +527,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "patch",
  			changesApplied: true,
  			mergedBranchForNestedPatches: false,
-@@ -315,7 +316,7 @@ describe("applyEligibleNestedPatches", () => {
+@@ -382,7 +384,7 @@ describe("applyEligibleNestedPatches", () => {
  		vi.spyOn(worktreeModule, "applyNestedPatches").mockRejectedValue(new Error("boom"));
  		const suffix = await applyEligibleNestedPatches({
  			result: result({ nestedPatches: [nestedPatch] }),
@@ -526,7 +536,7 @@ index 6a9a3c2..b214fea 100644
  			mergeMode: "branch",
  			changesApplied: true,
  			mergedBranchForNestedPatches: true,
-@@ -329,7 +330,7 @@ describe("applyEligibleNestedPatches", () => {
+@@ -396,7 +398,7 @@ describe("applyEligibleNestedPatches", () => {
  		]);
  		const suffix = await applyEligibleNestedPatches({
  			result: result({ nestedPatches: [nestedPatch] }),
@@ -537,7 +547,7 @@ index 6a9a3c2..b214fea 100644
  			mergedBranchForNestedPatches: false,
 diff --git a/packages/coding-agent/test/task/vcs.test.ts b/packages/coding-agent/test/task/vcs.test.ts
 new file mode 100644
-index 0000000..0760f0e
+index 000000000..0760f0e40
 --- /dev/null
 +++ b/packages/coding-agent/test/task/vcs.test.ts
 @@ -0,0 +1,94 @@

@@ -9,7 +9,7 @@ What must survive a rebase:
   keyword (clamped at its own call site), still reach the model's max.
 
 diff --git a/packages/coding-agent/src/auto-thinking/classifier.ts b/packages/coding-agent/src/auto-thinking/classifier.ts
-index 70a00f3..2787b92 100644
+index 70a00f3a3..2787b9265 100644
 --- a/packages/coding-agent/src/auto-thinking/classifier.ts
 +++ b/packages/coding-agent/src/auto-thinking/classifier.ts
 @@ -39,14 +39,17 @@ import { tinyModelClient } from "../tiny/title-client";
@@ -52,10 +52,10 @@ index 70a00f3..2787b92 100644
  	// The ceiling goes into the clamp itself: capping the request alone is not
  	// enough, because a sparse ladder snaps an excluded request back up.
 diff --git a/packages/coding-agent/test/auto-thinking-classifier.test.ts b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-index 3e0eea5..26a631e 100644
+index d579f46f8..263a58b54 100644
 --- a/packages/coding-agent/test/auto-thinking-classifier.test.ts
 +++ b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-@@ -277,15 +277,14 @@ describe("auto thinking classifier helpers", () => {
+@@ -277,11 +277,14 @@ describe("auto thinking classifier helpers", () => {
  	const MAX_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
  	const XHIGH_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
  
@@ -66,18 +66,14 @@ index 3e0eea5..26a631e 100644
  		const optedIn = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "high", "max");
  		await classifyDifficulty("refactor the scheduler", optedIn.deps);
  		const optedInRequest = optedIn.completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt: string[] };
--		// The label alone is inert: the criteria and the tie-break exception are
--		// what make the tier reachable, so all three must ship together.
 -		expect(optedInRequest.systemPrompt[0]).toContain("`max`");
--		expect(optedInRequest.systemPrompt[0]).toContain("no reproduction to work from");
--		expect(optedInRequest.systemPrompt[0]).toContain("except between `xhigh` and `max`");
 +		expect(optedInRequest.systemPrompt[0]).not.toMatch(/\bmax\b/);
 +		expect(optedInRequest.systemPrompt[0]).not.toContain("no reproduction to work from");
  
  		vi.restoreAllMocks();
  
-@@ -308,20 +307,19 @@ describe("auto thinking classifier helpers", () => {
- 		expect(unsupportedRequest.systemPrompt[0]).toContain("choose the lower one.");
+@@ -299,20 +302,19 @@ describe("auto thinking classifier helpers", () => {
+ 		expect(unsupportedRequest.systemPrompt[0]).not.toMatch(/\bmax\b/);
  	});
  
 -	it("resolves max only when opted in, and snaps it to the ceiling otherwise", async () => {
@@ -102,7 +98,7 @@ index 3e0eea5..26a631e 100644
  	});
  
  	it("takes the first label when the classifier echoes several", async () => {
-@@ -335,13 +333,13 @@ describe("auto thinking classifier helpers", () => {
+@@ -326,13 +328,13 @@ describe("auto thinking classifier helpers", () => {
  		expect(await classifyDifficulty("rename a helper", fixture.deps)).toBe(Effort.Low);
  	});
  
@@ -120,7 +116,7 @@ index 3e0eea5..26a631e 100644
  		// must not snap the request back up — auto yields nothing and the session
  		// keeps its current level.
  		const defaulted = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "xhigh");
-@@ -350,7 +348,7 @@ describe("auto thinking classifier helpers", () => {
+@@ -341,7 +343,7 @@ describe("auto thinking classifier helpers", () => {
  		vi.restoreAllMocks();
  
  		const optedIn = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "max", "max");
@@ -129,7 +125,7 @@ index 3e0eea5..26a631e 100644
  	});
  
  	it("has no provisional level on a max-only ladder", () => {
-@@ -388,6 +386,45 @@ describe("auto thinking classifier helpers", () => {
+@@ -379,6 +381,45 @@ describe("auto thinking classifier helpers", () => {
  		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);
  	});
  

@@ -1,11 +1,11 @@
 diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
-index 546b605..3578a77 100644
+index c0937abaa..06b3f6b40 100644
 --- a/packages/coding-agent/src/modes/controllers/event-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
-@@ -146,6 +146,13 @@ export class EventController {
- 	#prevHideThinking = false;
- 	#handlers: AgentSessionEventHandlers;
- 	#terminalProgressActive = false;
+@@ -190,6 +190,13 @@ export class EventController {
+ 	// once instead of twice.
+ 	#vocalizedMessageUpdates = new WeakSet<object>();
+ 	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
 +	// Tool name each pending component was created under, keyed weakly by the
 +	// component. Providers may stream a tool call whose name is still a
 +	// partial prefix when it first surfaces (llama.cpp's chat-diff streaming
@@ -16,10 +16,10 @@ index 546b605..3578a77 100644
  
  	constructor(private ctx: InteractiveModeContext) {
  		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-@@ -752,6 +759,22 @@ export class EventController {
- 			}
- 			for (const content of this.ctx.streamingMessage.content) {
- 				if (content.type !== "toolCall") continue;
+@@ -1015,6 +1022,22 @@ export class EventController {
+ 					this.#migrateStreamedToolCallId(priorId, content.id);
+ 				}
+ 				this.#streamedToolCallIdByIndex.set(contentIndex, content.id);
 +				// A pending component created under an earlier (partial) streamed
 +				// name is bound to the wrong renderer for the rest of the stream
 +				// (e.g. "wri" -> generic fallback while "write" owns a live
@@ -39,7 +39,7 @@ index 546b605..3578a77 100644
  				if (content.name === "read") {
  					if (!readArgsHaveTarget(content.arguments)) {
  						// Args still streaming — defer until path is parseable so we can route to the
-@@ -770,6 +793,7 @@ export class EventController {
+@@ -1033,6 +1056,7 @@ export class EventController {
  							group.updateArgs(content.arguments, content.id);
  							this.ctx.pendingTools.set(content.id, group);
  							this.#toolTimelineComponents.set(content.id, group);
@@ -47,7 +47,7 @@ index 546b605..3578a77 100644
  						}
  						continue;
  					}
-@@ -825,6 +849,7 @@ export class EventController {
+@@ -1090,6 +1114,7 @@ export class EventController {
  					this.ctx.chatContainer.addChild(component);
  					this.ctx.pendingTools.set(content.id, component);
  					this.#toolTimelineComponents.set(content.id, component);
@@ -57,7 +57,7 @@ index 546b605..3578a77 100644
  					// outran this streamed block (see #orphanedToolCompletions).
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 new file mode 100644
-index 0000000..d137d49
+index 000000000..bf8971e41
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 @@ -0,0 +1,101 @@
@@ -114,7 +114,7 @@ index 0000000..d137d49
 +			requestRender() {},
 +			requestComponentRender() {},
 +		},
-+		viewSession: { getToolByName: () => undefined },
++		viewSession: { getToolByName: () => undefined, hasBuiltInTool: () => true },
 +		sessionManager: { getCwd: () => process.cwd() },
 +		settings: { get: () => true },
 +		toolOutputExpanded: false,
@@ -164,7 +164,7 @@ index 0000000..d137d49
 +});
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 new file mode 100644
-index 0000000..4a2b7b8
+index 000000000..1a8ed93d3
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 @@ -0,0 +1,121 @@
@@ -233,7 +233,7 @@ index 0000000..4a2b7b8
 +			requestRender() {},
 +			requestComponentRender() {},
 +		},
-+		viewSession: { getToolByName: () => undefined },
++		viewSession: { getToolByName: () => undefined, hasBuiltInTool: () => true },
 +		sessionManager: { getCwd: () => process.cwd() },
 +		settings: { get: () => true },
 +		toolOutputExpanded: false,

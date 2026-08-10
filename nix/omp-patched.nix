@@ -2,7 +2,9 @@
 # vendored from hyperconfig, rebased onto omp 17.0.0, then 17.0.4 (isolation
 # orchestration moved into task/structured-subagent.ts), then 17.2.1 (eval
 # isolation tests moved to test/eval/agent-bridge-policy.test.ts; the
-# auto-thinking ceiling became upstream's autoEffortCeiling()) in
+# auto-thinking ceiling became upstream's autoEffortCeiling()), then 17.2.12
+# (isolation orchestration split into task/isolation-runner.ts; upstream added
+# deferred-cleanup tracking and streamed tool-call id re-keying) in
 # patches/omp/. Only
 # the jj patches ship here; personal patches (account/statusline/output-crop)
 # stay out.

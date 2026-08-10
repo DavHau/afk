@@ -32,7 +32,7 @@ What must survive a rebase:
   auto mode.
 
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index d8edec9..447b655 100644
+index d8edec958..447b655cf 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
 @@ -403,9 +403,12 @@ export interface IsolationHandle {
@@ -68,7 +68,7 @@ index d8edec9..447b655 100644
  	for (const candidate of candidates) {
  		await fs.rm(baseDir, { recursive: true, force: true });
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 7a39402..02610f3 100644
+index 7a3940276..02610f3f8 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -152,6 +152,47 @@ describe("worktree isolation helpers", () => {
