@@ -49,6 +49,10 @@ describe("distribution settings layer", () => {
 		expect(configGet("task.isolation.mode")).toBe("overlayfs");
 	});
 
+	it("defaults interrupt mode to wait", () => {
+		expect(configGet("interruptMode")).toBe("wait");
+	});
+
 	it("exposes the afk-skills root as a custom skills directory", () => {
 		const dirs = JSON.parse(configGet("skills.customDirectories")) as string[];
 		expect(dirs.length).toBeGreaterThan(0);

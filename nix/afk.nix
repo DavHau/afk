@@ -70,6 +70,9 @@ let
     async:
       # Required for background task subagents and async bash delivery.
       enabled: true
+    # Steering messages queue until the in-flight tool call finishes instead
+    # of aborting it mid-flight — unattended runs keep their work intact.
+    interruptMode: wait
   '';
 
   afk = wrapPackage {
