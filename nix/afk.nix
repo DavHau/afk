@@ -48,7 +48,11 @@ let
     task:
       isolation:
         # overlayfs: read-only lower layer + copy-up on write, in-process so
-        # it works inside the sandbox namespace. merge: branch parks each
+        # it works inside any sandbox whose payload owns a mount-capable
+        # user namespace. This is a PIN, not a hint: the
+        # omp-isolation-pinned-backend patch makes an explicit mode fail
+        # loudly instead of degrading to rcopy, which would silently drop
+        # gitignored files from snapshots. merge: branch parks each
         # subagent's commits on refs/omp/task/<id> (the jj-colocated patch).
         # apply: false (upstream task.isolation.apply since 17.1.x; replaces
         # the patched autoApply) so the top-level agent cherry-picks against

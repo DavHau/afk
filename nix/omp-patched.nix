@@ -54,6 +54,11 @@
 #   selections are untouched (a pinned level, and the `ultrathink` keyword,
 #   which clamps at its own call site, still reach the model's max). Ships one
 #   regression test and retargets the five upstream max-opt-in tests.
+# - omp-isolation-pinned-backend: an explicit task.isolation.mode is a hard
+#   pin — ensureIsolation no longer walks the resolver's fallback chain when
+#   a backend is configured. The distro sets overlayfs; a host where the
+#   overlay mount fails must fail the spawn loudly instead of silently
+#   degrading to rcopy (which drops gitignored files from snapshots).
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -93,6 +98,7 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-streamed-tool-name-rebind.patch
     ../patches/omp/omp-distro-default-settings.patch
     ../patches/omp/omp-auto-thinking-ceiling.patch
+    ../patches/omp/omp-isolation-pinned-backend.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
   # The pi-natives Rust addon is built once, from UNPATCHED upstream source,

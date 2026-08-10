@@ -1,0 +1,121 @@
+afk: an explicit task.isolation.mode pins the isolation backend — no
+silent fallback.
+
+Motivation: upstream treats the configured backend as a hint.
+ensureIsolation (task/worktree.ts) walks isoResolve's whole candidate
+list, so when the pinned backend's start fails (e.g. overlayfs: kernel
+mount EPERM inside a sandbox without a payload-owned userns) the spawn
+silently downgrades — typically to rcopy. rcopy materialises snapshots
+via `git worktree add` + dirty-state seeding, which drops all gitignored
+files from the snapshot (subagent task briefs under .superpowers/sdd/
+vanished), and the downgrade masks the actual environment breakage. afk
+ships task.isolation.mode: overlayfs in the distro config for sandboxes
+whose payload owns a mount-capable user namespace, so overlayfs is a hard
+requirement: a spawn that cannot get it must fail loudly, not copy.
+
+Scope: ensureIsolation only. `auto` (preferred === undefined) keeps the
+full resolver fallback chain and the fellBack/fallbackReason reporting;
+an explicit backend restricts the candidate list to exactly that
+backend, so an unavailable start surfaces as the thrown fallbackReason
+(the probe/mount denial message). Internal backend flexibility is
+untouched (the Overlayfs backend still tries fuse-overlayfs itself).
+
+What must survive a rebase:
+- ensureIsolation: candidates = [preferred] when preferred is set; the
+  resolver chain is consulted only for auto mode.
+- Tests (test/task/worktree.test.ts): a pinned backend whose isoStart
+  fails ISO_UNAVAILABLE rejects instead of trying other candidates; a
+  pinned backend that starts never consults the fallback chain.
+- Error surfacing: a pinned failure reports the pinned backend's own
+  isoStart error; resolution.reason (which may describe an unrelated
+  auto-chain candidate, e.g. "btrfs CLI not on PATH") is used only in
+  auto mode.
+
+diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
+index d8edec9..447b655 100644
+--- a/packages/coding-agent/src/task/worktree.ts
++++ b/packages/coding-agent/src/task/worktree.ts
+@@ -403,9 +403,12 @@ export interface IsolationHandle {
+ }
+ 
+ /**
+- * Materialise `merged` for a single task. `preferred` is a hint — when
+- * its prerequisites are missing the PAL silently falls back, and the
+- * caller learns about that through `IsolationHandle.fellBack` +
++ * Materialise `merged` for a single task. A `preferred` backend is a PIN:
++ * when its prerequisites are missing the spawn fails loudly instead of
++ * silently downgrading (a downgrade to rcopy drops gitignored files and
++ * masks broken overlayfs prerequisites, e.g. inside a sandbox). Only the
++ * `auto` mode (no `preferred`) walks the resolver's fallback chain, and
++ * the caller learns about that through `IsolationHandle.fellBack` +
+  * `fallbackReason`.
+  */
+ 
+@@ -434,8 +437,13 @@ export async function ensureIsolation(
+ 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
+ 	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
+ 	const resolution = natives.isoResolve(preferred ?? null);
+-	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
+-	let fallbackReason = resolution.reason ?? null;
++	const autoCandidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
++	const candidates = preferred === undefined ? autoCandidates : [preferred];
++	// Auto mode reports the resolver's first probe complaint; a pinned
++	// backend must report ITS OWN failure — resolution.reason may describe
++	// an unrelated auto-chain candidate (e.g. "btrfs CLI not on PATH" while
++	// the pinned overlayfs probe succeeded).
++	let fallbackReason = preferred === undefined ? (resolution.reason ?? null) : null;
+ 
+ 	for (const candidate of candidates) {
+ 		await fs.rm(baseDir, { recursive: true, force: true });
+diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
+index 7a39402..02610f3 100644
+--- a/packages/coding-agent/test/task/worktree.test.ts
++++ b/packages/coding-agent/test/task/worktree.test.ts
+@@ -152,6 +152,47 @@ describe("worktree isolation helpers", () => {
+ 			expect(handle.fallbackReason).toBe(unavailable.message);
+ 		});
+ 
++		it("pins an explicit preferred backend instead of falling back", async () => {
++			// afk: task.isolation.mode=overlayfs must never silently downgrade
++			// to rcopy — a downgrade drops gitignored files from snapshots and
++			// masks broken overlayfs prerequisites (e.g. sandbox userns). The
++			// surfaced error must be the pinned backend's own failure, not the
++			// resolver's complaint about an unrelated auto-chain candidate.
++			const unavailable = new Error("ISO_UNAVAILABLE: kernel overlay mount denied");
++			vi.spyOn(natives, "isoResolve").mockReturnValue({
++				kind: natives.IsoBackendKind.Overlayfs,
++				candidates: [natives.IsoBackendKind.Overlayfs, natives.IsoBackendKind.Rcopy],
++				fellBack: false,
++				reason: "`btrfs` CLI not on PATH",
++			});
++			const isoStart = vi.spyOn(natives, "isoStart").mockRejectedValue(unavailable);
++			vi.spyOn(natives, "isoIsUnavailableError").mockImplementation(message =>
++				message.startsWith("ISO_UNAVAILABLE:"),
++			);
++
++			await expect(
++				ensureIsolation(repo, "pinned-no-fallback", natives.IsoBackendKind.Overlayfs),
++			).rejects.toThrow("ISO_UNAVAILABLE: kernel overlay mount denied");
++
++			expect(isoStart.mock.calls.map(call => call[0])).toEqual([natives.IsoBackendKind.Overlayfs]);
++		});
++
++		it("succeeds on a pinned backend without consulting the fallback chain", async () => {
++			vi.spyOn(natives, "isoResolve").mockReturnValue({
++				kind: natives.IsoBackendKind.Overlayfs,
++				candidates: [natives.IsoBackendKind.Overlayfs, natives.IsoBackendKind.Rcopy],
++				fellBack: false,
++				reason: undefined,
++			});
++			const isoStart = vi.spyOn(natives, "isoStart").mockResolvedValue(undefined);
++
++			const handle = await ensureIsolation(repo, "pinned-ok", natives.IsoBackendKind.Overlayfs);
++
++			expect(isoStart.mock.calls.map(call => call[0])).toEqual([natives.IsoBackendKind.Overlayfs]);
++			expect(handle.backend).toBe(natives.IsoBackendKind.Overlayfs);
++			expect(handle.fellBack).toBe(false);
++		});
++
+ 		it("snapshots a pure jj workspace without VCS gating", async () => {
+ 			// Regression: ensureIsolation used to re-resolve the root via
+ 			// getRepoRoot, re-imposing the git gate that resolveVcsHandle had

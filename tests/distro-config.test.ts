@@ -45,6 +45,10 @@ describe("distribution settings layer", () => {
 		expect(configGet("startup.quiet")).toBe("true");
 	});
 
+	it("pins subagent isolation to overlayfs", () => {
+		expect(configGet("task.isolation.mode")).toBe("overlayfs");
+	});
+
 	it("exposes the afk-skills root as a custom skills directory", () => {
 		const dirs = JSON.parse(configGet("skills.customDirectories")) as string[];
 		expect(dirs.length).toBeGreaterThan(0);
