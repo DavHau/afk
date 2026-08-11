@@ -1,0 +1,153 @@
+afk: new fix-dispatch template — the fix loop's missing TDD carrier.
+
+Motivation: every other SDD stage has a prompt template that carries its
+discipline; the fix stage had only prose, and the prose said "the fixer
+fixes, re-runs the tests" — literal fix-then-test. A review finding is a
+known, already-observed defect: a test written after the fix passes on
+its first run and proves nothing, so a non-fix is indistinguishable from
+a fix and the scoped re-review approves it (2026-08-08 incident,
+caught by hand before merge). SKILL.md §4 links here
+(Template: fixer-prompt.md, via skills-subagent-driven-development.patch)
+and re-review-prompt.md verifies the RED evidence this template mandates
+(via skills-re-review-prompt.patch).
+
+What must survive a rebase:
+- New file under skills/subagent-driven-development/; if upstream ever
+  ships its own fix template, reconcile — the per-finding RED -> GREEN
+  work order is the point of this file.
+- Per-finding cycle, in order: failing test first (extend an existing
+  covering test file where one exists), run it and confirm it fails for
+  the finding's reason, minimal production fix, re-run green with
+  pristine output and neighbours still green.
+- `NOT TESTABLE: <why>` escape hatch only for findings with no
+  observable behaviour (naming, dead code, comments, pure refactors),
+  stated so fixers do not fake evidence.
+- Handoff discipline matches the sibling templates: isolated: true as a
+  task-tool parameter, agent per SKILL.md Agent Selection (rounds 4-5
+  bump one tier), repo-relative [BRIEF_FILE], local:// [REPORT_URI],
+  [TEST_FILES] named by the controller, no absolute paths, no git/jj.
+- Report contract: a "## Fix Round R" section appended per round with
+  per-finding RED (command + failing output + why expected) / GREEN
+  (command + passing output) or the NOT TESTABLE line; the short return
+  contract matches the implementer template.
+
+diff --git a/skills/subagent-driven-development/fixer-prompt.md b/skills/subagent-driven-development/fixer-prompt.md
+new file mode 100644
+index 0000000..848e37f
+--- /dev/null
++++ b/skills/subagent-driven-development/fixer-prompt.md
+@@ -0,0 +1,114 @@
++# Fix Subagent Prompt Template
++
++Use this template when dispatching a fix round. `isolated: true` below is a
++task-tool parameter (required by the schema; fixers edit files) — pass it on
++the tool call, not inside the prompt text. Choose the agent per SKILL.md
++Agent Selection; rounds 4-5 bump the agent type one tier. `[BRIEF_FILE]` is
++the brief's repo-RELATIVE path; `[REPORT_URI]` is `local://task-N-report.md`.
++Never substitute an absolute path into either — see SKILL.md File Handoffs.
++
++```
++Subagent (task tool):
++  isolated: true
++  description: "Fix Task N round R: [task name]"
++  agent: [AGENT — per SKILL.md Agent Selection; rounds 4-5 at least one
++         tier above the agent that got stuck]
++  prompt: |
++    You are fixing review findings on Task N: [task name], fix round R.
++
++    ## The Task
++
++    Read the task brief first: [BRIEF_FILE]
++    (a path relative to your working directory)
++
++    ## The Findings
++
++    Each finding below is a defect a reviewer observed in the current code:
++
++    [FINDINGS]
++
++    ## Prior History
++
++    Read the report file — it is the memory of every prior round:
++    [REPORT_URI]
++
++    ## Covering Tests
++
++    The tests covering the amended code: [TEST_FILES]
++    Extend these files for regression tests where they already cover the
++    area; run them, not the whole suite.
++
++    ## Your Job — per finding, in this order
++
++    A review finding is a known, already-observed defect. Prove each one
++    before you fix it:
++
++    1. **RED:** Reproduce the finding as a failing test FIRST — extend an
++       existing covering test file where one exists. Do not touch the
++       production code yet.
++    2. **Run it. Watch it fail.** Confirm it fails *for the finding's
++       reason* — not a typo, an import error, or a bad assertion. A test
++       failing for the wrong reason proves nothing.
++    3. **Fix the production code minimally.**
++    4. **GREEN:** Re-run. Confirm the new test passes, the output is
++       pristine, and the neighbouring tests in the covering files still
++       pass.
++
++    Never write the test after the fix: it passes on its first run and
++    proves nothing — including when the fix is wrong.
++
++    **NOT TESTABLE escape hatch:** some findings have no observable
++    behaviour — naming, dead code, a comment, a pure refactor. For those,
++    skip the cycle and write `NOT TESTABLE: <why>` in the fix report
++    instead of RED/GREEN. Anything with observable behaviour — wrong
++    value, wrong contract, missing validation, wrong ordering — is
++    testable and gets the cycle. Do not stretch this hatch to avoid
++    writing a test.
++
++    Do NOT run git or jj — you work in an isolated snapshot and the harness
++    captures your changes automatically when you finish.
++
++    Your working directory IS the project root: an isolated snapshot that
++    contains the full repo at the same relative paths. Use relative paths
++    for every file operation and every command. NEVER use an absolute path
++    into the original checkout — not in file edits, not as a bash working
++    directory — it would bypass your snapshot and corrupt the shared tree.
++    The only non-relative target you write is your local:// report.
++
++    ## Report Format
++
++    Append to [REPORT_URI] a section titled `## Fix Round R` with, per
++    finding:
++    - The finding one-liner
++    - **RED:** command run, the relevant failing output before the fix,
++      and why that failure was expected
++    - **GREEN:** command run and the relevant passing output after the fix
++    - Files changed
++    — or the `NOT TESTABLE: <why>` line with its justification.
++
++    Then report back with ONLY (under 15 lines — the detail lives in the
++    report file):
++    - **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
++    - Files changed (paths only)
++    - One-line test summary (e.g. "3 findings: 3 RED→GREEN, 14/14 passing")
++    - Your concerns, if any
++    - The report URI
++
++    If BLOCKED or NEEDS_CONTEXT, put the specifics in the final message
++    itself — the controller acts on it directly. Never silently produce
++    work you're unsure about.
++```
++
++**Placeholders:**
++- `[AGENT]` — per SKILL.md Agent Selection; rounds 4-5 bump one tier
++- `[BRIEF_FILE]` — the task brief's repo-relative path (same file the
++  implementer worked from)
++- `[FINDINGS]` — the open Critical/Important findings and spec gaps from
++  the review, copied verbatim, one per bullet
++- `[REPORT_URI]` — the `local://task-N-report.md` URI (fix reports appended)
++- `[TEST_FILES]` — the test files covering the amended code, named by the
++  controller so the fixer runs a focused set, not the whole suite
++
++**Fixer returns:** status, files changed, a one-line test summary, concerns,
++and the report URI. The per-finding RED/GREEN evidence lives in the report
++file, not the return message.

@@ -45,8 +45,12 @@ describe("distribution settings layer", () => {
 		expect(configGet("startup.quiet")).toBe("true");
 	});
 
-	it("pins subagent isolation to overlayfs", () => {
-		expect(configGet("task.isolation.mode")).toBe("overlayfs");
+	it("pins subagent isolation to reflink", () => {
+		expect(configGet("task.isolation.mode")).toBe("reflink");
+	});
+
+	it("leaves requireCow off so non-CoW hosts degrade to byte copies", () => {
+		expect(configGet("task.isolation.requireCow")).toBe("false");
 	});
 
 	it("defaults interrupt mode to wait", () => {
@@ -65,5 +69,18 @@ describe("distribution settings layer", () => {
 
 	it("lets the user's own config.yml win over the distro layer", () => {
 		expect(configGet("startup.quiet", { userConfig: "startup:\n  quiet: false\n" })).toBe("false");
+	});
+
+	it("ships all four SDD dispatch templates (rebase guard)", () => {
+		const dirs = JSON.parse(configGet("skills.customDirectories")) as string[];
+		const superpowers = dirs.find(dir => dir.includes("afk-skills"))!;
+		for (const tpl of [
+			"implementer-prompt.md",
+			"task-reviewer-prompt.md",
+			"re-review-prompt.md",
+			"fixer-prompt.md",
+		]) {
+			expect(existsSync(join(superpowers, "subagent-driven-development", tpl))).toBe(true);
+		}
 	});
 });

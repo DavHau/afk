@@ -6,6 +6,64 @@ Area: `nix/afk.nix` (distro `task.isolation`), `patches/omp/omp-jj-colocated-tas
 Severity: Important — the configured capture mode is not the one in use, and the
 documented check for unadopted work reads clean while work accumulates unseen.
 
+**RESOLVED 2026-08-10 by the omp 17.2.12 bump.** Branch capture now produces refs: 16
+`.patch` captures earlier that session, then 5 `refs/omp/task/*` refs after the bump.
+
+The 97 historical `.patch` captures named below still want triaging, but on the terms of
+`2026-08-10-overlayfs-capture-leaks-parent-writes.md`: captures in both modes carry parent
+and sibling writes.
+
+**CLOSED OUT 2026-08-11** against 17.2.12 source (the 17.2.1 tree is no longer
+pinned locally, so the original failure is not reproduced line-by-line; the
+17.2.12 mechanics below bound what it could have been):
+
+1. **Root cause class (AC1).** `merge: branch` is honored deterministically
+   (`isolation-runner.ts:176` → `commitToBranch`/`commitToTaskRef`), but ANY
+   throw inside the branch commit converts the run into a `.patch` capture:
+   `isolation-runner.ts:189-215` deletes the stale ref, writes
+   `<id>.patch`, and sets `result.error = "Merge failed: <msg>"`. There is no
+   strategy check and no opt-out — hypothesis 2 (branch capture attempted,
+   failed, fell back) was the mechanism; the `merge` key was never dead
+   (hypothesis 1 wrong for 17.2.12). The 97-for-97 consistency matches the
+   parent worktree carrying uncommitted changes essentially all session
+   (the `Entry not uptodate` class). The 17.2.12 bump fixed the underlying
+   commit failure; refs have been produced ever since.
+2. **Why it was silent (the real defect).** Under `apply: false`,
+   `structured-subagent.ts` renders the downgrade as
+   `Isolation: changes captured at \`<id>.patch\` (apply=false). Not
+   applied.` — byte-identical to a configured patch-mode run; `result.error`
+   is never rendered into the summary, and the merge phase (whose "Branch
+   merge failed" notification would fire) is skipped because of that same
+   error. Fixed by `patches/omp/omp-isolation-branch-capture-note.patch`:
+   a branch-mode capture that produced a patch artifact now renders a
+   `<system-notification>` naming the FAILED branch capture with
+   `result.error` and the artifact path; error-with-no-artifact gets its own
+   loud "changes were lost" notification.
+3. **AC4, amended.** "Fails the spawn loudly" is wrong at capture time — the
+   subagent's work already exists, and destroying it would be worse than the
+   downgrade. The invariant shipped instead: the downgrade can no longer be
+   mistaken for a configured patch capture. (Known residual soft spots,
+   upstream-scoped: `isolation-runner.ts:175` deferred-cleanup returns with
+   no artifact at all, and an empty `commitToBranch` result is
+   indistinguishable from "no changes".)
+4. **Stale `autoApply` (AC3).** `~/.omp/agent/config.yml` turned out to be an
+   orphaned Nix-store symlink from the removed pi.nix wrapper (hyperconfig no
+   longer generates it; afk under `OMP_PROFILE=afk` never reads it). It also
+   still pinned `mode: overlayfs`, which layers ABOVE the distro config and
+   would have silently defeated the reflink switch had the file ever applied.
+   Replaced with a user-owned file carrying only the safety keys
+   (`apply: false`, `merge: branch`, no `mode`); original preserved at
+   `config.yml.pre-2026-08-11.bak`.
+5. **AC5.** Not needed: patch capture is now loud, refs remain authoritative,
+   and the ref-based guidance stands unchanged.
+6. **The historical captures (AC6).** 119 by close-out (82 mmm, 26 ntop, 4
+   /tmp/yolo, 5 VibePN, 2 /tmp/game, ~6.9 MB). Decision (2026-08-11, with
+   the human partner): archived to
+   `~/.omp/profiles/afk/capture-archive-2026-08-11.tar.gz` (119 members
+   verified) and removed from the sessions tree — the bytes survive, but no
+   future session can mistake a contaminated capture for recoverable work.
+   The five forensically pinned captures remain in mmm's `refs/evidence`.
+
 ## Incident
 
 `task.isolation.merge: branch` is set in both config layers, yet no isolated subagent

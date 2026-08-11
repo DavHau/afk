@@ -1,12 +1,17 @@
-# omp-natives: the pi-natives Rust addon built from UNPATCHED upstream omp
-# source. All of afk's patches touch TypeScript only, so this artifact is
-# byte-identical across patch iterations; splitting it out means the expensive
-# cargo build runs once per omp version bump and is served from cache
-# thereafter. omp-patched consumes
-# $out through a preBuild seam instead of running cargo.
+# omp-natives: the pi-natives Rust addon built from upstream omp source plus
+# ONLY the Rust-affecting patches (currently omp-reflink-degraded-copy).
+# All other afk patches touch TypeScript only, so this artifact is byte-
+# identical across TS patch iterations; splitting it out means the expensive
+# cargo build runs once per omp version bump (or Rust patch change) and is
+# served from cache thereafter. omp-patched consumes
+# $out through a preBuild seam instead of running cargo — including the
+# regenerated index.d.ts, so a Rust patch that changes a napi signature
+# reaches the TS typecheck through this derivation, never through
+# omp-patched's own patch list.
 #
-# MUST NOT reference omp-patched or ../patches — the whole point is a
-# derivation whose hash is independent of the patch set.
+# MUST NOT reference omp-patched or TS-only patches — the hash may depend
+# on Rust-affecting patches alone, or every prompt tweak would trigger a
+# full cargo rebuild.
 #
 # $out layout:
 #   native/ — the complete post-build packages/natives/native/ directory:
@@ -37,8 +42,9 @@ in
 omp.overrideAttrs (old: {
   pname = "omp-natives";
 
-  # Explicitly empty: building from pristine upstream source is the point.
-  patches = [ ];
+  # Rust-affecting patches ONLY (see header). TS-only patches live in
+  # nix/omp-patched.nix.
+  patches = [ ../patches/omp/omp-reflink-degraded-copy.patch ];
 
   # Fast-compile override for the pi-natives Rust build. Upstream's release
   # profile (opt-level=3, lto="fat", codegen-units=1) serializes the whole

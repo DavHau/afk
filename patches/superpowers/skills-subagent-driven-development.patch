@@ -65,9 +65,17 @@ What must survive a rebase:
   `review-package PLAN_FILE "$(git merge-base HEAD <ref>)" <ref>`, never
   BASE..HEAD recorded before dispatch.
 - Finish step also asserts `git for-each-ref refs/omp/task` is empty.
+- Fix loop is TEST-FIRST (2026-08-08 incident: a fix dispatch composed
+  from the old fix-then-test prose let a fixer write tests after the
+  fix): the fixer reproduces each finding as a failing test before
+  touching production code; §4 links Template: fixer-prompt.md (the
+  file ships in skills-sdd-fixer-prompt.patch); the pre-re-review check
+  demands per-finding RED/GREEN evidence or `NOT TESTABLE: <why>`; the
+  rationalization table carries the "write the test after" row. The
+  string "The fixer fixes, re-runs the tests" must never return.
 
 diff --git a/skills/subagent-driven-development/SKILL.md b/skills/subagent-driven-development/SKILL.md
-index 6c0b834..2544492 100644
+index 6c0b834..d03dc66 100644
 --- a/skills/subagent-driven-development/SKILL.md
 +++ b/skills/subagent-driven-development/SKILL.md
 @@ -5,11 +5,11 @@ description: Use when executing implementation plans with independent tasks in t
@@ -472,7 +480,7 @@ index 6c0b834..2544492 100644
  Template: [task-reviewer-prompt.md](task-reviewer-prompt.md)
  
  ### 4. The fix loop
-@@ -316,41 +369,39 @@ Before the loop starts, two routes leave it immediately:
+@@ -316,41 +369,45 @@ Before the loop starts, two routes leave it immediately:
    contradiction: present the finding and the plan text, ask which governs.
    Do not dismiss the finding because the plan mandates it, and do not
    dispatch a fix that contradicts the plan without asking.
@@ -517,11 +525,17 @@ index 6c0b834..2544492 100644
 +gone once the harness captures it. Dispatch a fresh isolated fix subagent
 +carrying the brief's repo-relative path, the `local://` report URI, and the
 +open findings verbatim; the report file is the persistent memory across
-+rounds. The fixer fixes, re-runs the tests covering the amended code,
-+appends its fix report to the same report file, and returns the short
-+contract. Name the covering test files in the fix dispatch — a one-line fix
-+does not need the whole suite. Before dispatching the re-review, confirm the
-+fix report contains the covering tests, the command run, and the output.
++rounds. The fixer reproduces each finding as a failing test first, watches
++it fail for the finding's reason, then fixes — a review finding is a known
++defect, and a test written after the fix passes on its first run, proving
++nothing. It appends a per-finding RED/GREEN fix report to the same report
++file and returns the short contract. Name the covering test files in the
++fix dispatch — a one-line fix does not need the whole suite. Before
++dispatching the re-review, confirm the fix report shows, per finding, the
++failing run before the fix and the passing run after (or
++`NOT TESTABLE: <why>` for findings with no observable behaviour).
++
++Template: [fixer-prompt.md](fixer-prompt.md)
 +
 +**Rounds 4-5 — bump the agent type** (per Agent Selection) and add this
 +framing: "A prior implementer attempted this task [N] times; you own it now.
@@ -545,7 +559,7 @@ index 6c0b834..2544492 100644
  
  Never fix findings yourself in the controller session — your context stays
  clean for coordination, and controller fixes skip review.
-@@ -377,16 +428,26 @@ a silent discard is forbidden.
+@@ -377,16 +434,26 @@ a silent discard is forbidden.
  ### 5. Complete the task
  
  When the review comes back clean — or every open finding is parked with a
@@ -579,7 +593,7 @@ index 6c0b834..2544492 100644
  
  ## Final Review
  
-@@ -395,8 +456,7 @@ The final whole-branch review gets a package too: run
+@@ -395,8 +462,7 @@ The final whole-branch review gets a package too: run
  branch started from, e.g. `git merge-base main HEAD`) and include the
  printed path in the final review dispatch, so the final reviewer reads
  one file instead of re-deriving the branch diff with git commands. Dispatch
@@ -589,7 +603,7 @@ index 6c0b834..2544492 100644
  [code-reviewer.md](../requesting-code-review/code-reviewer.md). Point it at
  the ledger's deferred-minor and parked lines so it can triage which must be
  fixed before merge.
-@@ -406,8 +466,7 @@ with the complete findings list — not one fixer per finding.
+@@ -406,8 +472,7 @@ with the complete findings list — not one fixer per finding.
  Per-finding fixers each rebuild context and re-run suites; a real
  session's final-review fix wave cost more than all its tasks combined.
  Then run exactly one scoped re-review of the fix wave
@@ -599,7 +613,7 @@ index 6c0b834..2544492 100644
  Adjudicate any residual findings as in the task loop's breaker: park with
  rulings, or stop on load-bearing ones. There is no second fix wave —
  residual load-bearing findings surface to your human partner when
-@@ -418,7 +477,8 @@ finishing-a-development-branch presents the options.
+@@ -418,7 +483,8 @@ finishing-a-development-branch presents the options.
  When the final whole-branch review is clean and its fixes are merged,
  delete this plan's workspace (`rm -rf <workspace>`) — the git history is
  the record now. Sibling directories belong to other plans; leave them
@@ -609,7 +623,7 @@ index 6c0b834..2544492 100644
  
  Use superpowers:finishing-a-development-branch.
  
-@@ -427,7 +487,10 @@ Use superpowers:finishing-a-development-branch.
+@@ -427,11 +493,15 @@ Use superpowers:finishing-a-development-branch.
  | Excuse | Reality |
  |--------|---------|
  | "Close enough on spec compliance" | Reviewer found spec gaps = not done. Fix or hit the cap and adjudicate — those are the only exits. |
@@ -621,7 +635,12 @@ index 6c0b834..2544492 100644
  | "One more round will converge" | Past the cap, rounds don't converge — the failure is structural. Adjudicate and route. |
  | "The reviewer will just find something new anyway" | Scoped re-reviews verify fixes; they cannot wander. New findings on untouched code go to the ledger, not the loop. |
  | "This finding is obviously wrong, I'll drop it" | You adjudicate only at the cap, and every ruling is a ledger entry. Silent discards are forbidden. |
-@@ -440,61 +503,62 @@ Use superpowers:finishing-a-development-branch.
+ | "The fix was small, skip the re-review" | Unreviewed fixes are how regressions land. Every round ends with a scoped re-review. |
++| "The fix is obvious, I'll write the test after" | A test written after the fix passes immediately and proves nothing — including when the fix is wrong. Findings are known defects: reproduce, watch it fail, then fix. |
+ | "Reviews slow the loop down" | The loop without reviews is just unverified churn. Reviews are the loop's brakes and steering. |
+ | "Ledger bookkeeping is overhead" | The ledger is what survives compaction. Controllers without one have re-dispatched entire completed task sequences. |
+ 
+@@ -440,61 +510,62 @@ Use superpowers:finishing-a-development-branch.
  ```
  You: I'm using Subagent-Driven Development to execute this plan.
  

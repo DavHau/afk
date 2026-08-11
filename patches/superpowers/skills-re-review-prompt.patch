@@ -10,9 +10,15 @@ What must survive a rebase:
   repo-relative path.
 - Re-review range is the fix's own parked ref
   (merge-base HEAD <fixref> .. <fixref>), not FIX_BASE..HEAD.
+- Tests section assumes test-first fix rounds (see
+  skills-sdd-fixer-prompt.patch): the re-review demands per-finding RED
+  evidence — the failing run before the fix — or an accepted
+  `NOT TESTABLE: <why>` justification, and a green-only regression test
+  verdicts NOT ADDRESSED.
+- Finding Verdicts cite the RED evidence alongside file:line.
 
 diff --git a/skills/subagent-driven-development/re-review-prompt.md b/skills/subagent-driven-development/re-review-prompt.md
-index 18b0fb8..c4a9900 100644
+index 18b0fb8..b7f1cb6 100644
 --- a/skills/subagent-driven-development/re-review-prompt.md
 +++ b/skills/subagent-driven-development/re-review-prompt.md
 @@ -8,10 +8,8 @@ new breakage. It is not a fresh review — the full review already happened.
@@ -36,7 +42,46 @@ index 18b0fb8..c4a9900 100644
  
      **Fix base:** [FIX_BASE_SHA] (the head the previous review saw)
      **Head:** [HEAD_SHA]
-@@ -92,15 +90,15 @@ Subagent (general-purpose):
+@@ -54,13 +52,18 @@ Subagent (general-purpose):
+ 
+     ## Tests
+ 
+-    The implementer re-ran the tests covering the amended code and appended
+-    the results to the report file. Treat the report as unverified claims:
+-    confirm the fix report names the covering tests and shows their output,
+-    and verify the claims against the diff. Do not re-run the suite to
+-    confirm their report. Run a test only when reading the code raises a
+-    specific doubt that no existing run answers — and then a focused test,
+-    never a package-wide suite.
++    The fixer worked test-first: per finding, a regression test written and
++    run BEFORE the fix (RED — failing for the finding's reason), then the
++    fix, then the passing run (GREEN), appended to the report file. Treat
++    the report as unverified claims: confirm it shows, per finding, the
++    failing run before the fix and the passing run after — or a
++    `NOT TESTABLE: <why>` line whose justification you accept (no
++    observable behaviour: naming, dead code, comments, pure refactors).
++    A finding whose regression test only ever ran green is NOT ADDRESSED —
++    the fix is unproven. Verify the claims against the diff. Do not re-run
++    the suite to confirm their report. Run a test only when reading the
++    code raises a specific doubt that no existing run answers — and then a
++    focused test, never a package-wide suite.
+ 
+     ## Output Format
+ 
+@@ -72,8 +75,10 @@ Subagent (general-purpose):
+ 
+     For each finding in The Findings Under Verification, in order:
+     - **[finding one-liner]** — ADDRESSED | NOT ADDRESSED, with file:line
+-      evidence. "Attempted" is not addressed: the specific defect must no
+-      longer exist.
++      evidence AND the RED evidence cited from the fix report (the failing
++      run before the fix, or the accepted `NOT TESTABLE` justification).
++      "Attempted" is not addressed: the specific defect must no longer
++      exist, and a green-only regression test does not prove it ever did.
+ 
+     ### New Breakage in the Fix Diff
+ 
+@@ -92,15 +97,15 @@ Subagent (general-purpose):
  ```
  
  **Placeholders:**

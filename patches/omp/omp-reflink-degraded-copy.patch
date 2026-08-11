@@ -1,0 +1,457 @@
+afk: the reflink backend degrades to a byte copy when the filesystem
+cannot clone extents, unless the new StartOptions.require_cow forbids it.
+
+Motivation: task.isolation.mode is a hard PIN under
+omp-isolation-pinned-backend, and the afk distro pins `reflink` (a real
+frozen tree — overlayfs reads through to the parent's LIVE worktree, so
+every capture leaked parent/sibling writes; see
+backlog/2026-08-10-overlayfs-capture-leaks-parent-writes.md in afk).
+pi-iso's probe() reports reflink available on ANY Linux without testing
+the filesystem, so on ext4/tmpfs the pin used to fail every isolated
+spawn at the first clone_file (FICLONE -> EOPNOTSUPP -> IsoError::
+Unavailable). Degrading WITHIN the reflink backend is not the fallback
+the pin forbids: rcopy fallback changes WHICH FILES the snapshot
+contains (drops gitignored files); a byte copy changes only how bytes
+are stored — file set, freeze and capture semantics are identical.
+
+Layer note: this patch is Rust-only and is applied by nix/omp-natives.nix
+(the natives builder). nix/omp-patched.nix consumes the rebuilt
+libpi_natives.so and the regenerated index.d.ts (iso_start gains a 4th
+`options` parameter) through its preBuild seam; the TS caller ships in
+omp-isolation-require-cow.patch.
+
+What must survive a rebase:
+- clone_file: on FICLONE failure with EXDEV|EOPNOTSUPP|ENOTTY|EINVAL|
+  ENOSYS and require_cow == false, fall through to std::io::copy on the
+  ALREADY-OPEN fds (both at offset 0) instead of erroring; any other
+  errno, or require_cow == true, keeps the original error path
+  (IsoError::unavailable via map_clone_error, dst unlinked).
+- preserve_permissions/set_times_nofollow still run after the copy path
+  — mode and mtimes must match the clone path.
+- pi_iso::StartOptions { require_cow } + IsolationBackend::start_with
+  default method (ignores options); only linux_reflink overrides it and
+  its start() forwards to start_with with defaults.
+- napi: iso_start(kind?, lower, merged, options?) with
+  #[napi(object)] IsoStartOptions { require_cow: Option<bool> },
+  dispatching through start_with. No new runtime symbol — index.js
+  needs no edit. The CHECKED-IN packages/natives/native/index.d.ts is
+  patched by hand (the napi dts regeneration step does not run in the
+  nix natives build — verified: an unpatched .d.ts survived a full
+  omp-natives rebuild), so the 4th `options` parameter must be kept in
+  sync manually on rebases.
+- Tests in linux_reflink.rs: tree materialisation + frozen-snapshot
+  assertion (parent writes after start are invisible), strict-mode
+  refusal, and the /dev/shm (tmpfs) fallback test that exercises the
+  real EOPNOTSUPP byte-copy path plus strict refusal on any normal
+  Linux host. Tests never assert WHICH path ran on ambient filesystems
+  — only content equality and error class.
+
+diff --git a/crates/pi-iso/src/lib.rs b/crates/pi-iso/src/lib.rs
+index 85320b3..113b702 100644
+--- a/crates/pi-iso/src/lib.rs
++++ b/crates/pi-iso/src/lib.rs
+@@ -166,6 +166,18 @@ impl ProbeResult {
+ 	}
+ }
+ 
++/// Per-start options.
++///
++/// Passed through [`IsolationBackend::start_with`]; the default trait method
++/// ignores them, so only backends with a degradation choice (currently
++/// [`BackendKind::LinuxReflink`]) inspect them.
++#[derive(Debug, Clone, Copy, Default)]
++pub struct StartOptions {
++	/// Refuse to degrade copy-on-write cloning to a plain byte copy when the
++	/// filesystem cannot clone extents.
++	pub require_cow: bool,
++}
++
+ /// Error returned by every backend operation.
+ ///
+ /// `Unavailable` is the only variant callers are expected to treat specially —
+@@ -243,6 +255,14 @@ pub trait IsolationBackend: Send + Sync {
+ 
+ 	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()>;
+ 
++	/// [`start`](Self::start) with per-call [`StartOptions`]. The default
++	/// implementation ignores the options — backends without a degradation
++	/// choice behave identically either way.
++	fn start_with(&self, lower: &Path, merged: &Path, opts: StartOptions) -> IsoResult<()> {
++		let _ = opts;
++		self.start(lower, merged)
++	}
++
+ 	fn stop(&self, merged: &Path) -> IsoResult<()>;
+ 
+ 	/// Capture the changes between `lower` and the current state of
+diff --git a/crates/pi-iso/src/linux_reflink.rs b/crates/pi-iso/src/linux_reflink.rs
+index d0a23fe..815e611 100644
+--- a/crates/pi-iso/src/linux_reflink.rs
++++ b/crates/pi-iso/src/linux_reflink.rs
+@@ -3,9 +3,12 @@
+ //! This backend recursively builds a writable directory tree at `merged` from
+ //! `lower`. Directories and symlinks are recreated, while regular files are
+ //! cloned with the Linux `FICLONE` ioctl so filesystems such as btrfs, XFS,
+-//! OCFS2, and bcachefs can share extents until either side is modified. There
+-//! is no mount or kernel state to undo, so [`stop`](IsolationBackend::stop) is
+-//! a recursive remove.
++//! OCFS2, and bcachefs can share extents until either side is modified. On
++//! filesystems without extent cloning (ext4, tmpfs) each file degrades to a
++//! plain byte copy unless [`StartOptions::require_cow`] is set — the snapshot
++//! contains the same file set either way, only the storage cost differs.
++//! There is no mount or kernel state to undo, so
++//! [`stop`](IsolationBackend::stop) is a recursive remove.
+ 
+ use std::path::Path;
+ 
+@@ -13,7 +16,7 @@ use async_trait::async_trait;
+ 
+ #[cfg(not(target_os = "linux"))]
+ use crate::IsoError;
+-use crate::{BackendKind, IsoResult, IsolationBackend, ProbeResult};
++use crate::{BackendKind, IsoResult, IsolationBackend, ProbeResult, StartOptions};
+ 
+ pub struct LinuxReflinkBackend;
+ 
+@@ -39,13 +42,17 @@ impl IsolationBackend for LinuxReflinkBackend {
+ 	}
+ 
+ 	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()> {
++		self.start_with(lower, merged, StartOptions::default())
++	}
++
++	fn start_with(&self, lower: &Path, merged: &Path, opts: StartOptions) -> IsoResult<()> {
+ 		#[cfg(target_os = "linux")]
+ 		{
+-			imp::start(lower, merged)
++			imp::start(lower, merged, opts.require_cow)
+ 		}
+ 		#[cfg(not(target_os = "linux"))]
+ 		{
+-			let _ = (lower, merged);
++			let _ = (lower, merged, opts);
+ 			Err(IsoError::unavailable("Linux FICLONE reflink isolation is only available on Linux"))
+ 		}
+ 	}
+@@ -84,11 +91,11 @@ mod imp {
+ 	// both.
+ 	const FICLONE: libc::Ioctl = 0x4004_9409;
+ 
+-	pub fn start(lower: &Path, merged: &Path) -> IsoResult<()> {
++	pub fn start(lower: &Path, merged: &Path, require_cow: bool) -> IsoResult<()> {
+ 		let lower = canonical_existing_dir(lower)?;
+ 		prepare_destination(merged)?;
+ 
+-		let result = recursive_reflink(&lower, merged);
++		let result = recursive_reflink(&lower, merged, require_cow);
+ 		if result.is_err() {
+ 			let _ = fs::remove_dir_all(merged);
+ 		}
+@@ -154,7 +161,7 @@ mod imp {
+ 		Ok(())
+ 	}
+ 
+-	fn recursive_reflink(src: &Path, dst: &Path) -> IsoResult<()> {
++	fn recursive_reflink(src: &Path, dst: &Path, require_cow: bool) -> IsoResult<()> {
+ 		let meta = fs::symlink_metadata(src)
+ 			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
+ 		fs::create_dir(dst)
+@@ -173,9 +180,9 @@ mod imp {
+ 			if file_type.is_symlink() {
+ 				clone_symlink(&src_path, &dst_path)?;
+ 			} else if file_type.is_dir() {
+-				recursive_reflink(&src_path, &dst_path)?;
++				recursive_reflink(&src_path, &dst_path, require_cow)?;
+ 			} else if file_type.is_file() {
+-				clone_file(&src_path, &dst_path)?;
++				clone_file(&src_path, &dst_path, require_cow)?;
+ 			} else {
+ 				return Err(IsoError::other(format!(
+ 					"unsupported file type in reflink source: {}",
+@@ -200,7 +207,7 @@ mod imp {
+ 		Ok(())
+ 	}
+ 
+-	fn clone_file(src: &Path, dst: &Path) -> IsoResult<()> {
++	fn clone_file(src: &Path, dst: &Path, require_cow: bool) -> IsoResult<()> {
+ 		let meta = fs::symlink_metadata(src)
+ 			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
+ 		let src_file = File::open(src)
+@@ -216,8 +223,23 @@ mod imp {
+ 		let rc = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
+ 		if rc != 0 {
+ 			let err = std::io::Error::last_os_error();
+-			let _ = fs::remove_file(dst);
+-			return Err(map_clone_error(src, dst, err));
++			if require_cow || !cow_unsupported(&err) {
++				let _ = fs::remove_file(dst);
++				return Err(map_clone_error(src, dst, err));
++			}
++			// The filesystem cannot clone extents (ext4, tmpfs, ...). Degrade
++			// to a plain byte copy: the snapshot's file set, freeze and capture
++			// semantics are identical — only the storage cost grows. Both fds
++			// are still at offset 0; `std::io::copy` uses in-kernel
++			// copy_file_range/sendfile where available.
++			std::io::copy(&mut &src_file, &mut &dst_file).map_err(|copy_err| {
++				let _ = fs::remove_file(dst);
++				IsoError::other(format!(
++					"copy {} -> {}: {copy_err}",
++					src.display(),
++					dst.display()
++				))
++			})?;
+ 		}
+ 
+ 		preserve_permissions(dst, &meta)?;
+@@ -225,12 +247,15 @@ mod imp {
+ 		Ok(())
+ 	}
+ 
++	fn cow_unsupported(err: &std::io::Error) -> bool {
++		matches!(
++			err.raw_os_error(),
++			Some(libc::EXDEV | libc::EOPNOTSUPP | libc::ENOTTY | libc::EINVAL | libc::ENOSYS)
++		)
++	}
++
+ 	fn map_clone_error(src: &Path, dst: &Path, err: std::io::Error) -> IsoError {
+-		if let Some(code) = err.raw_os_error()
+-			&& matches!(
+-				code,
+-				libc::EXDEV | libc::EOPNOTSUPP | libc::ENOTTY | libc::EINVAL | libc::ENOSYS
+-			) {
++		if cow_unsupported(&err) {
+ 			return IsoError::unavailable(format!(
+ 				"FICLONE unsupported for {} -> {}: {err}",
+ 				src.display(),
+@@ -265,3 +290,134 @@ mod imp {
+ 		}
+ 	}
+ }
++
++#[cfg(all(test, target_os = "linux"))]
++mod tests {
++	use std::{
++		fs,
++		os::fd::AsRawFd,
++		path::{Path, PathBuf},
++	};
++
++	use super::imp;
++
++	const FICLONE: libc::Ioctl = 0x4004_9409;
++
++	/// Fresh scratch directory under the OS temp dir (tmpfs on most Linux
++	/// hosts — a filesystem without FICLONE, which is the degradation case
++	/// this module exists for; on a CoW temp dir the same tests exercise the
++	/// clone path instead).
++	fn scratch(name: &str) -> PathBuf {
++		let dir = std::env::temp_dir()
++			.join(format!("pi-iso-reflink-{name}-{}", std::process::id()));
++		let _ = fs::remove_dir_all(&dir);
++		fs::create_dir_all(&dir).unwrap();
++		dir
++	}
++
++	fn ficlone_supported_in(dir: &Path) -> bool {
++		// Non-empty source: cloning a zero-length file is degenerate and can
++		// fail (EINVAL) even on filesystems whose extent cloning works.
++		fs::write(dir.join("probe-src"), b"probe").unwrap();
++		let src = fs::File::open(dir.join("probe-src")).unwrap();
++		let dst = fs::File::create(dir.join("probe-dst")).unwrap();
++		// SAFETY: both fds are valid for the duration of the call.
++		let rc = unsafe { libc::ioctl(dst.as_raw_fd(), FICLONE, src.as_raw_fd()) };
++		let _ = fs::remove_file(dir.join("probe-src"));
++		let _ = fs::remove_file(dir.join("probe-dst"));
++		rc == 0
++	}
++
++	fn build_lower(dir: &Path) -> PathBuf {
++		let lower = dir.join("lower");
++		fs::create_dir(&lower).unwrap();
++		fs::write(lower.join("file.txt"), b"reflink me").unwrap();
++		fs::create_dir(lower.join("sub")).unwrap();
++		fs::write(lower.join("sub/nested.bin"), vec![0xa5u8; 8192]).unwrap();
++		std::os::unix::fs::symlink("file.txt", lower.join("link")).unwrap();
++		lower
++	}
++
++	#[test]
++	fn start_materialises_identical_tree_with_or_without_ficlone() {
++		let dir = scratch("materialise");
++		let lower = build_lower(&dir);
++		let merged = dir.join("merged");
++
++		imp::start(&lower, &merged, false).unwrap();
++
++		assert_eq!(fs::read(merged.join("file.txt")).unwrap(), b"reflink me");
++		assert_eq!(fs::read(merged.join("sub/nested.bin")).unwrap(), vec![0xa5u8; 8192]);
++		assert_eq!(
++			fs::read_link(merged.join("link")).unwrap(),
++			PathBuf::from("file.txt")
++		);
++		// The snapshot is frozen: a parent write after start must not appear.
++		fs::write(lower.join("file.txt"), b"parent wrote after dispatch").unwrap();
++		fs::write(lower.join("new-parent-file"), b"late").unwrap();
++		assert_eq!(fs::read(merged.join("file.txt")).unwrap(), b"reflink me");
++		assert!(!merged.join("new-parent-file").exists());
++
++		imp::stop(&merged).unwrap();
++		assert!(!merged.exists());
++		let _ = fs::remove_dir_all(&dir);
++	}
++
++	#[test]
++	fn require_cow_refuses_byte_copy_degradation() {
++		let dir = scratch("require-cow");
++		let lower = build_lower(&dir);
++		let merged = dir.join("merged");
++
++		let result = imp::start(&lower, &merged, true);
++		if ficlone_supported_in(&dir) {
++			// CoW filesystem: strictness is satisfiable, start must succeed.
++			result.unwrap();
++			assert_eq!(fs::read(merged.join("file.txt")).unwrap(), b"reflink me");
++		} else {
++			// No FICLONE: strict mode must fail as unavailable and leave no
++			// partial tree behind.
++			let err = result.unwrap_err();
++			assert!(err.is_unavailable(), "expected Unavailable, got: {err}");
++			assert!(!merged.exists());
++		}
++		let _ = fs::remove_dir_all(&dir);
++	}
++
++
++	/// The degradation case proper: `/dev/shm` is tmpfs on virtually every
++	/// Linux host, and tmpfs has no extent cloning — FICLONE fails with
++	/// EOPNOTSUPP and `clone_file` must fall back to a byte copy. Skipped
++	/// (trivially green) on exotic hosts where `/dev/shm` clones.
++	#[test]
++	fn byte_copy_fallback_on_non_cow_filesystem() {
++		let shm = Path::new("/dev/shm");
++		if !shm.is_dir() {
++			return;
++		}
++		let dir = shm.join(format!("pi-iso-reflink-fallback-{}", std::process::id()));
++		let _ = fs::remove_dir_all(&dir);
++		fs::create_dir_all(&dir).unwrap();
++		let lower = build_lower(&dir);
++		let merged = dir.join("merged");
++
++		if ficlone_supported_in(&dir) {
++			let _ = fs::remove_dir_all(&dir);
++			return;
++		}
++
++		// Permissive mode: the tree materialises via byte copies.
++		imp::start(&lower, &merged, false).unwrap();
++		assert_eq!(fs::read(merged.join("file.txt")).unwrap(), b"reflink me");
++		assert_eq!(fs::read(merged.join("sub/nested.bin")).unwrap(), vec![0xa5u8; 8192]);
++		imp::stop(&merged).unwrap();
++
++		// Strict mode: the same tree must refuse to materialise.
++		let err = imp::start(&lower, &merged, true).unwrap_err();
++		assert!(err.is_unavailable(), "expected Unavailable, got: {err}");
++		assert!(!merged.exists());
++
++		let _ = fs::remove_dir_all(&dir);
++	}
++
++}
+diff --git a/crates/pi-natives/src/iso.rs b/crates/pi-natives/src/iso.rs
+index a4614d5..b8dcb72 100644
+--- a/crates/pi-natives/src/iso.rs
++++ b/crates/pi-natives/src/iso.rs
+@@ -7,8 +7,10 @@
+ //!   hint) and report any fallback to the caller.
+ //! - `iso_probe(kind?)` — backend availability, with an optional explicit kind
+ //!   override; falls back to the native backend when omitted.
+-//! - `iso_start(kind?, lower, merged)` / `iso_stop(kind?, merged)` — sync
+-//!   syscalls wrapped in `spawn_blocking` so the JS side gets a normal Promise.
++//! - `iso_start(kind?, lower, merged, options?)` / `iso_stop(kind?, merged)` —
++//!   sync syscalls wrapped in `spawn_blocking` so the JS side gets a normal
++//!   Promise. `options.requireCow` refuses the reflink backend's byte-copy
++//!   degradation on filesystems without extent cloning.
+ //! - `iso_diff(lower, merged)` — backend-agnostic diff capture; emits one
+ //!   [`IsoFileChange`] per file. `diff` is `Some(unified)` for text files and
+ //!   `None` for binary files — callers copy the bytes from `merged` directly if
+@@ -20,7 +22,7 @@
+ 
+ use napi::bindgen_prelude::*;
+ use napi_derive::napi;
+-use pi_iso::{BackendKind, ChangeKind, Diff, FileChange, IsoError, IsolationBackend};
++use pi_iso::{BackendKind, ChangeKind, Diff, FileChange, IsoError, IsolationBackend, StartOptions};
+ 
+ const ISO_UNAVAILABLE_PREFIX: &str = "ISO_UNAVAILABLE:";
+ 
+@@ -126,17 +128,35 @@ pub fn iso_resolve(preferred: Option<IsoBackendKind>) -> IsoResolveResult {
+ 	}
+ }
+ 
++/// Options for [`iso_start`].
++#[napi(object)]
++pub struct IsoStartOptions {
++	/// Refuse to degrade copy-on-write cloning to a plain byte copy when the
++	/// filesystem cannot clone extents (reflink backend only).
++	pub require_cow: Option<bool>,
++}
++
+ /// Materialise `merged` as a writable view of `lower` using the requested
+ /// backend. `kind` defaults to the native backend.
+ #[napi]
+-pub async fn iso_start(kind: Option<IsoBackendKind>, lower: String, merged: String) -> Result<()> {
++pub async fn iso_start(
++	kind: Option<IsoBackendKind>,
++	lower: String,
++	merged: String,
++	options: Option<IsoStartOptions>,
++) -> Result<()> {
+ 	let resolved = kind.map_or_else(BackendKind::native, from_napi_kind);
+ 	let lower_path = std::path::PathBuf::from(lower);
+ 	let merged_path = std::path::PathBuf::from(merged);
+-	tokio::task::spawn_blocking(move || pi_iso::backend(resolved).start(&lower_path, &merged_path))
+-		.await
+-		.map_err(|err| Error::from_reason(format!("iso_start join: {err}")))?
+-		.map_err(to_napi_error)
++	let opts = StartOptions {
++		require_cow: options.and_then(|o| o.require_cow).unwrap_or(false),
++	};
++	tokio::task::spawn_blocking(move || {
++		pi_iso::backend(resolved).start_with(&lower_path, &merged_path, opts)
++	})
++	.await
++	.map_err(|err| Error::from_reason(format!("iso_start join: {err}")))?
++	.map_err(to_napi_error)
+ }
+ 
+ /// Tear down a previously started backend at `merged`.
+diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
+index 611df54..8f2fcd7 100644
+--- a/packages/natives/native/index.d.ts
++++ b/packages/natives/native/index.d.ts
+@@ -1300,11 +1300,22 @@ export interface IsoResolveResult {
+   reason?: string
+ }
+ 
++/** Options for `isoStart`. */
++export interface IsoStartOptions {
++  /**
++   * Refuse to degrade copy-on-write cloning to a plain byte copy when the
++   * filesystem cannot clone extents (reflink backend only).
++   */
++  requireCow?: boolean
++}
++
+ /**
+  * Materialise `merged` as a writable view of `lower` using the requested
+- * backend. `kind` defaults to the native backend.
++ * backend. `kind` defaults to the native backend. `options.requireCow`
++ * refuses the reflink backend's byte-copy degradation on filesystems
++ * without extent cloning.
+  */
+-export declare function isoStart(kind: IsoBackendKind | undefined | null, lower: string, merged: string): Promise<void>
++export declare function isoStart(kind: IsoBackendKind | undefined | null, lower: string, merged: string, options?: IsoStartOptions | undefined | null): Promise<void>
+ 
+ /** Tear down a previously started backend at `merged`. */
+ export declare function isoStop(kind: IsoBackendKind | undefined | null, merged: string): Promise<void>

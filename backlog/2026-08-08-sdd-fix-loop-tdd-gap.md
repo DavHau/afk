@@ -4,6 +4,34 @@ Filed: 2026-08-08
 Area: `patches/superpowers/skills-subagent-driven-development.patch` (skill: `subagent-driven-development`)
 Severity: Important — silently degrades the one stage whose whole purpose is regression coverage.
 
+**RESOLVED 2026-08-11.** Implemented as proposed:
+
+1. `patches/superpowers/skills-sdd-fixer-prompt.patch` (new): creates
+   `skills/subagent-driven-development/fixer-prompt.md` — per-finding
+   RED → GREEN work order (reproduce as a failing test first, confirm it
+   fails for the finding's reason, minimal fix, re-run green with pristine
+   output), the `NOT TESTABLE: <why>` escape hatch stated so fixers do not
+   fake evidence, the `## Fix Round R` report contract, and the same
+   handoff discipline as the sibling templates (isolated: true as a
+   tool parameter, repo-relative brief, local:// report, [TEST_FILES],
+   no git/jj).
+2. `skills-subagent-driven-development.patch` amended: §4's
+   fix-then-test sentence replaced with the test-first paragraph,
+   `Template: [fixer-prompt.md](fixer-prompt.md)` added, and the
+   "write the test after" row added to Common Rationalizations. The string
+   "The fixer fixes, re-runs the tests" is gone from the built skill.
+3. `skills-re-review-prompt.patch` amended: the Tests section demands
+   per-finding RED evidence (or an accepted NOT TESTABLE justification),
+   a green-only regression test verdicts NOT ADDRESSED, and Finding
+   Verdicts cite the RED evidence alongside file:line.
+
+Verified: all patches apply to the pinned upstream with zero fuzz;
+`nix build .#afk-skills` succeeds; built output carries all four templates
+(asserted by a new rebase-guard test in `tests/distro-config.test.ts`, 7/7
+passing). Dry run (AC9): a two-finding fix dispatch composed from the
+template needs only the five placeholders — the template is self-contained;
+no other skill text required changes.
+
 ## Incident
 
 A controller session was executing `subagent-driven-development` (SDD) against

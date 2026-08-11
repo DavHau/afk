@@ -61,6 +61,24 @@
 #   a backend is configured. The distro sets overlayfs; a host where the
 #   overlay mount fails must fail the spawn loudly instead of silently
 #   degrading to rcopy (which drops gitignored files from snapshots).
+#   (The distro pinned overlayfs until 2026-08-11; it now pins reflink —
+#   overlayfs's lower layer is the parent's LIVE worktree, so captures
+#   leaked parent/sibling writes; see the afk backlog.)
+# - omp-reflink-degraded-copy: Rust-only, applied in nix/omp-natives.nix
+#   (NOT in the list below): the reflink backend degrades per-file to a
+#   byte copy on filesystems without FICLONE (ext4/tmpfs) unless
+#   StartOptions.require_cow forbids it; iso_start gains an optional
+#   4th `options` napi parameter. The regenerated index.d.ts reaches
+#   this build through the natives preBuild seam.
+# - omp-isolation-require-cow: task.isolation.requireCow (boolean,
+#   default false) plumbed settings -> structured-subagent ->
+#   isolation-runner -> ensureIsolation -> isoStart options; true
+#   restores the hard spawn failure when reflink cannot clone extents.
+# - omp-isolation-branch-capture-note: under apply=false, a configured
+#   branch capture that fell back to a .patch artifact is announced as a
+#   FAILED branch capture (with result.error) instead of rendering
+#   exactly like a configured patch-mode capture — the silence that let
+#   97 downgraded captures accumulate unnoticed (2026-08-10 incident).
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -101,11 +119,14 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-distro-default-settings.patch
     ../patches/omp/omp-auto-thinking-ceiling.patch
     ../patches/omp/omp-isolation-pinned-backend.patch
+    ../patches/omp/omp-isolation-require-cow.patch
+    ../patches/omp/omp-isolation-branch-capture-note.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
-  # The pi-natives Rust addon is built once, from UNPATCHED upstream source,
-  # in nix/omp-natives.nix (the patches above are TypeScript-only, so the
-  # artifact is identical across patch iterations). This preBuild neutralizes
+  # The pi-natives Rust addon is built once, from upstream source plus the
+  # Rust-affecting patches, in nix/omp-natives.nix (the patches above are
+  # TypeScript-only, so the artifact is identical across TS patch
+  # iterations). This preBuild neutralizes
   # upstream's Rust steps without editing its buildPhase text, so an upstream
   # rebase that reshuffles buildPhase needs no changes here. Four seams, each
   # aimed at one upstream line:
