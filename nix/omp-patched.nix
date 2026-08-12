@@ -79,6 +79,15 @@
 #   FAILED branch capture (with result.error) instead of rendering
 #   exactly like a configured patch-mode capture — the silence that let
 #   97 downgraded captures accumulate unnoticed (2026-08-10 incident).
+# - omp-goal-no-pause-on-interrupt: a user interrupt no longer pauses an
+#   active goal. With interruptMode=wait a typed message queues as a steer,
+#   but the empty-Enter queue flush (and Esc) abort the turn with
+#   goalReason "interrupted", and onTaskAborted paused the goal
+#   unconditionally — every steer-by-double-Enter stranded the goal until a
+#   manual /goal resume (2026-08-11: goal dead from 15:08 to session end).
+#   onTaskAborted now only flushes usage accounting; /goal pause and the
+#   thread-resume auto-pause are untouched. Retargets the upstream
+#   pause-on-interrupt regression test to the keep-active contract.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -121,6 +130,7 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-isolation-pinned-backend.patch
     ../patches/omp/omp-isolation-require-cow.patch
     ../patches/omp/omp-isolation-branch-capture-note.patch
+    ../patches/omp/omp-goal-no-pause-on-interrupt.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
   # The pi-natives Rust addon is built once, from upstream source plus the

@@ -1,0 +1,87 @@
+afk: a user interrupt no longer pauses an active goal.
+
+Why: with interruptMode=wait a typed message queues as a steer, but the
+TUI's empty-Enter queue flush (input-controller.ts setupEditorSubmitHandler)
+and Esc both abort the active turn, and AgentSession.abort() defaults
+goalReason to "interrupted" -- GoalRuntime.onTaskAborted then paused the
+goal unconditionally. Every steer-by-double-Enter stranded the goal until
+someone remembered /goal resume (observed 2026-08-11: goal paused at 15:08,
+session ran interactively until 23:35 with the goal loop dead).
+
+What must survive a rebase:
+- onTaskAborted keeps ONLY the usage-accounting flush (with the
+  reason=internal persistWallClock distinction); it never flips
+  status/enabled and never persists goal_paused.
+- Deliberate pauses stay: pauseGoal() (/goal pause) and onThreadResumed's
+  auto-pause on session resume are untouched.
+- Post-interrupt behavior needs no other change: the queued steer drains
+  after the abort unwinds, and #scheduleGoalContinuation's guards (editor
+  text, pending submission, 800ms idle timer) keep the goal from fighting
+  a user who is typing.
+
+diff --git a/packages/coding-agent/src/goals/runtime.ts b/packages/coding-agent/src/goals/runtime.ts
+index ae65b9abf..e30db57e1 100644
+--- a/packages/coding-agent/src/goals/runtime.ts
++++ b/packages/coding-agent/src/goals/runtime.ts
+@@ -233,25 +233,20 @@ export class GoalRuntime {
+ 	}
+ 
+ 	async onTaskAborted(options?: { reason?: "interrupted" | "internal" }): Promise<void> {
+-		const state = this.#host.getState();
+-		const needsAccounting = state?.enabled && isAccountingStatus(state.goal);
+-		const needsPause = options?.reason === "interrupted" && state?.enabled && state.goal.status === "active";
+-		if (!needsAccounting && !needsPause) {
++		// afk distro: a user interrupt does NOT pause an active goal. Interrupts
++		// here are overwhelmingly steering (interruptMode=wait queues the steer;
++		// the empty-Enter queue flush and Esc-then-type both abort the turn with
++		// reason "interrupted"), and pausing on every one strands the goal until
++		// someone remembers /goal resume. Only /goal pause (pauseGoal) and
++		// thread-resume reconciliation (onThreadResumed) pause a goal now; the
++		// abort still flushes usage accounting so budgets stay honest.
++		if (!this.#hasAccountingState()) {
+ 			this.#turnSnapshot = undefined;
+ 			return;
+ 		}
+ 		await this.#withAccounting(async () => {
+ 			await this.#flushUsageLocked("suppressed", undefined, options?.reason === "internal");
+ 			this.#turnSnapshot = undefined;
+-			if (options?.reason !== "interrupted") return;
+-			const cloned = this.#getStateClone();
+-			if (!cloned?.enabled || cloned.goal.status !== "active") return;
+-			cloned.enabled = false;
+-			cloned.goal.status = "paused";
+-			cloned.goal.updatedAt = this.#now();
+-			this.#clearActiveAccounting();
+-			this.#budgetReportedFor = undefined;
+-			await this.#commitState(cloned, { persist: "goal_paused" });
+ 		});
+ 	}
+ 
+diff --git a/packages/coding-agent/test/goals/goal-runtime.test.ts b/packages/coding-agent/test/goals/goal-runtime.test.ts
+index d4dd510a3..a20b284cf 100644
+--- a/packages/coding-agent/test/goals/goal-runtime.test.ts
++++ b/packages/coding-agent/test/goals/goal-runtime.test.ts
+@@ -250,7 +250,7 @@ describe("goal runtime", () => {
+ 		expect(harness.hiddenMessages).toHaveLength(2);
+ 	});
+ 
+-	it("pauses an active goal when an interruption aborts the task", async () => {
++	it("keeps an active goal active when an interruption aborts the task", async () => {
+ 		const harness = createHarness({
+ 			state: { enabled: true, mode: "active", goal: createGoal() },
+ 		});
+@@ -261,11 +261,11 @@ describe("goal runtime", () => {
+ 		await harness.runtime.onTaskAborted({ reason: "interrupted" });
+ 
+ 		const state = harness.getState();
+-		expect(state?.enabled).toBe(false);
+-		expect(state?.goal.status).toBe("paused");
++		expect(state?.enabled).toBe(true);
++		expect(state?.goal.status).toBe("active");
+ 		expect(state?.goal.tokensUsed).toBe(4);
+ 		expect(state?.goal.timeUsedSeconds).toBe(1);
+-		expect(harness.persists.at(-1)?.mode).toBe("goal_paused");
++		expect(harness.persists.at(-1)?.mode).toBe("goal");
+ 	});
+ 
+ 	it("auto-pauses active goals when a thread resumes", async () => {
