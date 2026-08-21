@@ -141,6 +141,9 @@ let
       # builds in the original checkout via absolute paths (isolation is a
       # snapshot, not a jail).
       ln -sf ${../extensions/isolation-guard.ts} "$config_dir/extensions/isolation-guard.ts"
+      # /account: manual OAuth account switching for multi-subscription
+      # providers (see omp-anthropic-weekly-reset-priority.patch).
+      ln -sf ${../extensions/account.ts} "$config_dir/extensions/account.ts"
     '';
   };
 in

@@ -4,10 +4,9 @@
 # isolation tests moved to test/eval/agent-bridge-policy.test.ts; the
 # auto-thinking ceiling became upstream's autoEffortCeiling()), then 17.2.12
 # (isolation orchestration split into task/isolation-runner.ts; upstream added
-# deferred-cleanup tracking and streamed tool-call id re-keying) in
-# patches/omp/. Only
-# the jj patches ship here; personal patches (account/statusline/output-crop)
-# stay out.
+# deferred-cleanup tracking and streamed tool-call id re-keying), then 17.2.14
+# (two personal patches rebased back in: the Anthropic weekly-reset ranking
+# and the status-line account email — see below) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -88,6 +87,19 @@
 #   onTaskAborted now only flushes usage accounting; /goal pause and the
 #   thread-resume auto-pause are untouched. Retargets the upstream
 #   pause-on-interrupt regression test to the keep-active contract.
+# - omp-anthropic-weekly-reset-priority: Claude subscriptions rank OAuth
+#   accounts by their soonest shared 7d window reset (60s tie tolerance)
+#   instead of by required drain of expiring headroom, plus
+#   sessionStickyOnly identity lookups and pinSessionCredential() (which
+#   also clears the credential's rate-limit blocks). Resurrected from the
+#   hyperconfig 16.3.x personal patch set after the afk consolidation;
+#   17.2.14's deterministic ranking (session-hash + orderPos tiebreak) made
+#   the old weighted-sampling test expectations obsolete.
+# - omp-statusline-anthropic-account: the cost segment appends the
+#   session-sticky Anthropic OAuth account email (dimmed, 40-col truncated)
+#   so the TUI shows which account a multi-subscription session is billed
+#   against; a one-shot startup getApiKey warmup attributes the session so
+#   the email appears at launch instead of at the first prompt.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -131,6 +143,8 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-isolation-require-cow.patch
     ../patches/omp/omp-isolation-branch-capture-note.patch
     ../patches/omp/omp-goal-no-pause-on-interrupt.patch
+    ../patches/omp/omp-anthropic-weekly-reset-priority.patch
+    ../patches/omp/omp-statusline-anthropic-account.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
   # The pi-natives Rust addon is built once, from upstream source plus the
