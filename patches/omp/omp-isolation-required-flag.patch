@@ -36,7 +36,7 @@ What must survive a rebase:
   isolation is off.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 4538a05a9..688801b42 100644
+index 9103cd8..f2deaa3 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -26,7 +26,7 @@
@@ -58,10 +58,10 @@ index 4538a05a9..688801b42 100644
  There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
  
 diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
-index 50ff4eb48..6d5c33fdb 100644
+index 1be1c2d..c35f015 100644
 --- a/packages/coding-agent/src/prompts/tools/task.md
 +++ b/packages/coding-agent/src/prompts/tools/task.md
-@@ -31,9 +31,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
+@@ -33,9 +33,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
    - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
  {{#if isolationEnabled}}
  {{#if applyIsolatedChanges}}
@@ -73,7 +73,7 @@ index 50ff4eb48..6d5c33fdb 100644
  {{/if}}
  {{/if}}
  {{else}}
-@@ -46,9 +46,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
+@@ -50,9 +50,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
  - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
  {{#if isolationEnabled}}
  {{#if applyIsolatedChanges}}
@@ -86,7 +86,7 @@ index 50ff4eb48..6d5c33fdb 100644
  {{/if}}
  {{/if}}
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index efaa901ce..711f9a95a 100644
+index 062cab6..1f4f8a6 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
 @@ -125,7 +125,7 @@ const taskItemSchemaIsolated = type({
@@ -140,10 +140,10 @@ index efaa901ce..711f9a95a 100644
  		});
  	}
 diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
-index c2372bb35..a4c461e8a 100644
+index 3406a6c..782343c 100644
 --- a/packages/coding-agent/test/task/task-batch.test.ts
 +++ b/packages/coding-agent/test/task/task-batch.test.ts
-@@ -169,6 +169,41 @@ describe("task.batch schema gating", () => {
+@@ -199,6 +199,41 @@ describe("task.batch schema gating", () => {
  		}
  		expect(isolatedSchema.type).toBe("boolean");
  		expect(itemProperties.apply).toBeUndefined();
@@ -186,7 +186,7 @@ index c2372bb35..a4c461e8a 100644
  
  	it("hides isolation from the dynamic batch schema in plan mode", async () => {
 diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
-index b9ddd7347..09b8df145 100644
+index b9ddd73..09b8df1 100644
 --- a/packages/coding-agent/test/task/task-schema.test.ts
 +++ b/packages/coding-agent/test/task/task-schema.test.ts
 @@ -13,12 +13,12 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -213,7 +213,7 @@ index b9ddd7347..09b8df145 100644
  			context: "shared background",
  			tasks: [{ name: "A", task: "..." }],
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index 8f81f6861..f08830a35 100644
+index 8f81f68..f08830a 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
 @@ -6,9 +6,10 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";

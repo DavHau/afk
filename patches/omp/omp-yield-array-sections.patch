@@ -1,5 +1,17 @@
+diff --git a/packages/coding-agent/src/prompts/tools/yield.md b/packages/coding-agent/src/prompts/tools/yield.md
+index 3eed160..3edcbbd 100644
+--- a/packages/coding-agent/src/prompts/tools/yield.md
++++ b/packages/coding-agent/src/prompts/tools/yield.md
+@@ -1,6 +1,6 @@
+ Submit subagent output. Always wrap the payload: `result: { data: <your output> }` for success, `result: { error: "message" }` for failure. `data`/`error` at the top level or a bare payload is invalid.
+ 
+-Omit `type` for the usual single terminal structured result. Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates.
++Omit `type` for the usual single terminal structured result. Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates. For an array-valued section, `data` is one element or an array of elements (an array payload is always read as the whole section's elements).
+ {{#if hasOutputSchema}}
+ This task declares an output schema: the terminal `result.data` MUST be the full object matching it. A data-less `type: "result"` finalizes previously submitted incremental sections; it is invalid when no sections were submitted — prose in your last turn can never satisfy the schema.
+ {{else}}
 diff --git a/packages/coding-agent/src/task/yield-assembly.ts b/packages/coding-agent/src/task/yield-assembly.ts
-index cfd7a2693..be2b42dd0 100644
+index cfd7a26..be2b42d 100644
 --- a/packages/coding-agent/src/task/yield-assembly.ts
 +++ b/packages/coding-agent/src/task/yield-assembly.ts
 @@ -70,12 +70,16 @@ function appendYieldSection(
@@ -23,7 +35,7 @@ index cfd7a2693..be2b42dd0 100644
  	sectionCounts.set(label, count + 1);
  }
 diff --git a/packages/coding-agent/src/tools/output-schema-validator.ts b/packages/coding-agent/src/tools/output-schema-validator.ts
-index f09b469c9..b27482b83 100644
+index f09b469..b27482b 100644
 --- a/packages/coding-agent/src/tools/output-schema-validator.ts
 +++ b/packages/coding-agent/src/tools/output-schema-validator.ts
 @@ -110,10 +110,12 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
@@ -63,21 +75,8 @@ index f09b469c9..b27482b83 100644
  	}
  	return validators;
  }
-diff --git a/packages/coding-agent/src/tools/yield.ts b/packages/coding-agent/src/tools/yield.ts
-index fec205953..ffe3024ff 100644
---- a/packages/coding-agent/src/tools/yield.ts
-+++ b/packages/coding-agent/src/tools/yield.ts
-@@ -215,7 +215,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
- 	readonly label = "Submit Result";
- 	readonly description =
- 		"Submit subagent output. Omit `type` for the usual final structured result.\n\n" +
--		'Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates. Pass `type: "result"` to finalize; when `data` is omitted, your last assistant turn becomes the raw final result.\n' +
-+		'Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates. For an array-valued section, `data` is one element or an array of elements (an array payload is always read as the whole section\'s elements). Pass `type: "result"` to finalize; when `data` is omitted, your last assistant turn becomes the raw final result.\n' +
- 		'Use `result: { data: <your output> }` for success, or `result: { error: "message" }` for failure. Keep the `result` wrapper.';
- 	readonly parameters: TSchema;
- 	strict = true;
 diff --git a/packages/coding-agent/test/tools/output-schema-validator.test.ts b/packages/coding-agent/test/tools/output-schema-validator.test.ts
-index a89b50c8b..6a7805966 100644
+index a89b50c..6a78059 100644
 --- a/packages/coding-agent/test/tools/output-schema-validator.test.ts
 +++ b/packages/coding-agent/test/tools/output-schema-validator.test.ts
 @@ -70,7 +70,7 @@ describe("buildOutputValidator", () => {
@@ -104,7 +103,7 @@ index a89b50c8b..6a7805966 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index 574bee40c..e78cd06a0 100644
+index 6e33a32..0a0863b 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
 @@ -7,7 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -116,7 +115,7 @@ index 574bee40c..e78cd06a0 100644
  
  function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
  	return {
-@@ -225,6 +225,55 @@ describe("YieldTool", () => {
+@@ -355,6 +355,55 @@ describe("YieldTool", () => {
  		).rejects.toThrow(/Section "findings" does not match schema.*body/);
  	});
  

@@ -33,10 +33,10 @@ What must survive a rebase:
   pure-jj snapshot test's exact-args assertion carries the 4th `null`.
 
 diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
-index 3083aab..8d82942 100644
+index 5202909..67043d4 100644
 --- a/packages/coding-agent/src/config/settings-schema.ts
 +++ b/packages/coding-agent/src/config/settings-schema.ts
-@@ -4494,6 +4494,18 @@ export const SETTINGS_SCHEMA = {
+@@ -4880,6 +4880,18 @@ export const SETTINGS_SCHEMA = {
  		},
  	},
  
@@ -56,10 +56,10 @@ index 3083aab..8d82942 100644
  		type: "boolean",
  		default: true,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index c9de644..7506d54 100644
+index 6679eeb..175ed77 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -136,6 +136,7 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
+@@ -139,6 +139,7 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
  // embedders need project-level opt-outs for reminder/prelude prompt injection.
  const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
  	"task.isolation.mode",
@@ -68,7 +68,7 @@ index c9de644..7506d54 100644
  	"task.isolation.merge",
  	"task.isolation.commits",
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 6000940..5dd6d8f 100644
+index 05ada7e..a1a3148 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
 @@ -103,6 +103,8 @@ export interface IsolatedRunOptions {
@@ -80,7 +80,7 @@ index 6000940..5dd6d8f 100644
  	/** Stable id used as the isolation worktree namespace and as the branch suffix. */
  	agentId: string;
  	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs). */
-@@ -156,7 +158,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -159,7 +161,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  	let deferredCleanup: Promise<void> | undefined;
  	try {
  		const taskBaseline = structuredClone(opts.context.baseline);
@@ -89,31 +89,40 @@ index 6000940..5dd6d8f 100644
  		const isolationDir = handle.mergedDir;
  		const vcs = opts.context.vcs;
  		await vcs.prepareIsolationDir?.(isolationDir);
+diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
+index 262a4b1..9426aa1 100644
+--- a/packages/coding-agent/src/task/structured-subagent.ts
++++ b/packages/coding-agent/src/task/structured-subagent.ts
+@@ -597,6 +597,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+ 				baseOptions,
+ 				context: isolationContext,
+ 				preferredBackend: parseIsolationMode(request.session.settings.get("task.isolation.mode")),
++				requireCow: request.session.settings.get("task.isolation.requireCow"),
+ 				agentId: id,
+ 				mergeMode: policy.mergeMode,
+ 				artifactsDir: lease.artifactsDir,
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 447b655..d7de488 100644
+index 2c1e9b7..dc89461 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -409,7 +409,10 @@ export interface IsolationHandle {
-  * masks broken overlayfs prerequisites, e.g. inside a sandbox). Only the
-  * `auto` mode (no `preferred`) walks the resolver's fallback chain, and
-  * the caller learns about that through `IsolationHandle.fellBack` +
-- * `fallbackReason`.
-+ * `fallbackReason`. `requireCow` (`task.isolation.requireCow`) is forwarded
-+ * to the backend: the reflink backend then refuses its byte-copy
-+ * degradation on filesystems without extent cloning, so a pinned reflink
-+ * spawn fails loudly instead of silently paying full-copy disk cost.
+@@ -498,11 +498,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
+  * Snapshot `repoRoot` into a CoW isolation mount. `repoRoot` must already be
+  * the VCS-resolved workspace root ({@link VcsHandle.root} — git checkout or
+  * jj workspace); resolution/gating happens in `resolveVcsHandle`, not here.
++ * `requireCow` (`task.isolation.requireCow`) is forwarded to the backend:
++ * the reflink backend then refuses its byte-copy degradation on filesystems
++ * without extent cloning, so a pinned reflink spawn fails loudly instead of
++ * silently paying full-copy disk cost.
   */
- 
- function errorMessage(err: unknown): string {
-@@ -431,6 +434,7 @@ export async function ensureIsolation(
+ export async function ensureIsolation(
  	repoRoot: string,
  	id: string,
  	preferred?: IsoBackendKind,
 +	requireCow = false,
  ): Promise<IsolationHandle> {
- 	const repository = await git.repo.resolve(repoRoot);
- 	const sourceCommonDir = repository?.commonDir ?? path.join(repoRoot, ".git");
-@@ -455,7 +459,7 @@ export async function ensureIsolation(
+ 	const sourceCommonDir = vcs.git(repoRoot)?.info().commonDir ?? path.join(repoRoot, ".git");
+ 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
+@@ -530,7 +535,7 @@ export async function ensureIsolation(
  		await fs.mkdir(baseDir, { recursive: true });
  		await writeIsolationOwner(baseDir, id);
  		try {
@@ -122,11 +131,63 @@ index 447b655..d7de488 100644
  			// Sever the isolation's git metadata from the source checkout. Copy
  			// backends duplicate `repoRoot`'s `.git` verbatim — a linked-worktree
  			// pointer file (or the rcopy `git worktree add` registration) leaves
+diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
+index 48af776..45cc265 100644
+--- a/packages/coding-agent/test/task/isolation-runner.test.ts
++++ b/packages/coding-agent/test/task/isolation-runner.test.ts
+@@ -145,6 +145,7 @@ describe("runIsolatedSubprocess", () => {
+ 			},
+ 			context: { vcs: new GitCheckoutHandle(repoRoot), repoRoot, baseline },
+ 			preferredBackend: undefined,
++			requireCow: false,
+ 			agentId: "PreserveBranchFailure",
+ 			mergeMode: "branch",
+ 			artifactsDir,
+@@ -231,6 +232,7 @@ describe("runIsolatedSubprocess", () => {
+ 			},
+ 			context: { vcs: new GitCheckoutHandle(repoRoot), repoRoot, baseline },
+ 			preferredBackend: undefined,
++			requireCow: false,
+ 			agentId: "RescueBranchCommits",
+ 			mergeMode: "branch",
+ 			artifactsDir,
+@@ -289,6 +291,7 @@ describe("runIsolatedSubprocess", () => {
+ 				},
+ 			},
+ 			preferredBackend: undefined,
++			requireCow: false,
+ 			agentId: "DeferredCleanup",
+ 			mergeMode: "patch",
+ 			artifactsDir: "/artifacts",
+@@ -348,6 +351,7 @@ describe("runIsolatedSubprocess", () => {
+ 			},
+ 			context: { vcs: new GitCheckoutHandle("/repo"), repoRoot: "/repo", baseline },
+ 			preferredBackend: undefined,
++			requireCow: false,
+ 			agentId: "DeferredSuccess",
+ 			mergeMode: "patch",
+ 			artifactsDir,
+@@ -428,6 +432,7 @@ describe("runIsolatedSubprocess", () => {
+ 					},
+ 				},
+ 				preferredBackend: undefined,
++			requireCow: false,
+ 				agentId: "UsageAccounting",
+ 				mergeMode: "patch",
+ 				artifactsDir: "/artifacts",
+@@ -733,6 +738,7 @@ describe.skipIf(!jjAvailable)("isolated run in a jj workspace (end to end)", ()
+ 			},
+ 			context,
+ 			preferredBackend: undefined,
++			requireCow: false,
+ 			agentId: "JjE2E",
+ 			mergeMode: "branch",
+ 			artifactsDir,
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 02610f3..47cd9b3 100644
+index f0dd894..3b13eee 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -193,6 +193,49 @@ describe("worktree isolation helpers", () => {
+@@ -231,6 +231,49 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fellBack).toBe(false);
  		});
  
@@ -135,7 +196,7 @@ index 02610f3..47cd9b3 100644
 +				kind: natives.IsoBackendKind.LinuxReflink,
 +				candidates: [natives.IsoBackendKind.LinuxReflink],
 +				fellBack: false,
-+				reason: null,
++				reason: undefined,
 +			});
 +			const isoStart = vi.spyOn(natives, "isoStart").mockResolvedValue(undefined);
 +
@@ -159,7 +220,7 @@ index 02610f3..47cd9b3 100644
 +				kind: natives.IsoBackendKind.LinuxReflink,
 +				candidates: [natives.IsoBackendKind.LinuxReflink],
 +				fellBack: false,
-+				reason: null,
++				reason: undefined,
 +			});
 +			const isoStart = vi.spyOn(natives, "isoStart").mockResolvedValue(undefined);
 +
@@ -176,7 +237,7 @@ index 02610f3..47cd9b3 100644
  		it("snapshots a pure jj workspace without VCS gating", async () => {
  			// Regression: ensureIsolation used to re-resolve the root via
  			// getRepoRoot, re-imposing the git gate that resolveVcsHandle had
-@@ -211,7 +254,7 @@ describe("worktree isolation helpers", () => {
+@@ -249,7 +292,7 @@ describe("worktree isolation helpers", () => {
  
  			const handle = await ensureIsolation(jjWs, "pure-jj-no-gate");
  
@@ -185,15 +246,3 @@ index 02610f3..47cd9b3 100644
  		});
  
  		it("uses compact isolation paths that do not embed long task ids", async () => {
-diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index f08361c..3dbf2d3 100644
---- a/packages/coding-agent/src/task/structured-subagent.ts
-+++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -581,6 +581,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
- 					baseOptions,
- 					context: isolationContext,
- 					preferredBackend: parseIsolationMode(request.session.settings.get("task.isolation.mode")),
-+					requireCow: request.session.settings.get("task.isolation.requireCow"),
- 					agentId: id,
- 					mergeMode: policy.mergeMode,
- 					artifactsDir: lease.artifactsDir,

@@ -38,7 +38,10 @@ What must survive a rebase:
   patched by hand (the napi dts regeneration step does not run in the
   nix natives build — verified: an unpatched .d.ts survived a full
   omp-natives rebuild), so the 4th `options` parameter must be kept in
-  sync manually on rebases.
+  sync manually on rebases. Since 18.x napi emits declarations in
+  case-insensitive alphabetical order, so the IsoStartOptions
+  interface sits BETWEEN isoStart and isoStop (isostart < isostartoptions
+  < isostop), mirroring the isoProbe/IsoProbeResult pattern.
 - Tests in linux_reflink.rs: tree materialisation + frozen-snapshot
   assertion (parent writes after start are invisible), strict-mode
   refusal, and the /dev/shm (tmpfs) fallback test that exercises the
@@ -360,7 +363,7 @@ index d0a23fe..815e611 100644
 +
 +}
 diff --git a/crates/pi-natives/src/iso.rs b/crates/pi-natives/src/iso.rs
-index a4614d5..b8dcb72 100644
+index 051fa5c..67cfc65 100644
 --- a/crates/pi-natives/src/iso.rs
 +++ b/crates/pi-natives/src/iso.rs
 @@ -7,8 +7,10 @@
@@ -383,9 +386,9 @@ index a4614d5..b8dcb72 100644
 -use pi_iso::{BackendKind, ChangeKind, Diff, FileChange, IsoError, IsolationBackend};
 +use pi_iso::{BackendKind, ChangeKind, Diff, FileChange, IsoError, IsolationBackend, StartOptions};
  
- const ISO_UNAVAILABLE_PREFIX: &str = "ISO_UNAVAILABLE:";
+ use crate::js;
  
-@@ -126,17 +128,35 @@ pub fn iso_resolve(preferred: Option<IsoBackendKind>) -> IsoResolveResult {
+@@ -129,17 +131,35 @@ pub fn iso_resolve(preferred: Option<IsoBackendKind>) -> IsoResolveResult {
  	}
  }
  
@@ -427,22 +430,11 @@ index a4614d5..b8dcb72 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index 611df54..8f2fcd7 100644
+index d635eea..cc7c80b 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -1300,11 +1300,22 @@ export interface IsoResolveResult {
-   reason?: string
- }
+@@ -1668,9 +1668,20 @@ export interface IsoResolveResult {
  
-+/** Options for `isoStart`. */
-+export interface IsoStartOptions {
-+  /**
-+   * Refuse to degrade copy-on-write cloning to a plain byte copy when the
-+   * filesystem cannot clone extents (reflink backend only).
-+   */
-+  requireCow?: boolean
-+}
-+
  /**
   * Materialise `merged` as a writable view of `lower` using the requested
 - * backend. `kind` defaults to the native backend.
@@ -452,6 +444,15 @@ index 611df54..8f2fcd7 100644
   */
 -export declare function isoStart(kind: IsoBackendKind | undefined | null, lower: string, merged: string): Promise<void>
 +export declare function isoStart(kind: IsoBackendKind | undefined | null, lower: string, merged: string, options?: IsoStartOptions | undefined | null): Promise<void>
++
++/** Options for `isoStart`. */
++export interface IsoStartOptions {
++  /**
++   * Refuse to degrade copy-on-write cloning to a plain byte copy when the
++   * filesystem cannot clone extents (reflink backend only).
++   */
++  requireCow?: boolean
++}
  
  /** Tear down a previously started backend at `merged`. */
  export declare function isoStop(kind: IsoBackendKind | undefined | null, merged: string): Promise<void>

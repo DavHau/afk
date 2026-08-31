@@ -15,9 +15,18 @@ What must survive a rebase:
   nothing inside isolation may write through to the shared jj store.
 - Conflict behavior: in-store merge failure = workspace untouched, ref
   parked; nested git repos under a jj workspace are not captured.
+- Since 18.0.11: workspace discovery goes through the native layer
+  (vcs.isPureJj routing in resolveVcsHandle, vcs.jj(cwd).storeDir() for
+  the store); the old utils/jj.ts façade is gone, so vcs-jj.ts carries
+  its own runJj/runGit Bun.spawn helpers — the native jj layer is
+  read-only, and the CLI's snapshot/`new`/`abandon` semantics are the
+  contract. ensureIsolation takes the pre-resolved workspace root (no
+  internal getRepoRoot re-gating). Upstream 18.x already generalized the
+  isolation-preparation error message, so the old structured-subagent
+  wording hunk is retired.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 45e320f1e..4538a05a9 100644
+index f8a4dbc..febb89b 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -112,6 +112,7 @@ Artifacts and side channels:
@@ -29,10 +38,10 @@ index 45e320f1e..4538a05a9 100644
  - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `designer`, `reviewer`, `security-reviewer`, `librarian`, `task`, `sonic`).
  - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 83c45cc6c..600094039 100644
+index 54798b4..05ada7e 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -158,6 +158,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -161,6 +161,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		const taskBaseline = structuredClone(opts.context.baseline);
  		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
  		const isolationDir = handle.mergedDir;
@@ -41,33 +50,20 @@ index 83c45cc6c..600094039 100644
  		const result = await runSubprocess({
  			...opts.baseOptions,
  			worktree: isolationDir,
-@@ -169,7 +171,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 			},
- 		});
- 		if (deferredCleanup) return result;
+@@ -179,7 +181,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+ 		if (deferredCleanup && result.exitCode === 0) {
+ 			await deferredCleanup;
+ 		}
 -		const vcs = opts.context.vcs;
  		if (opts.mergeMode === "branch" && result.exitCode === 0) {
  			try {
  				const commitResult = await vcs.commitToTaskRef(
-diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index c9895d96f..f08361c90 100644
---- a/packages/coding-agent/src/task/structured-subagent.ts
-+++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -570,7 +570,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
- 				const message = error instanceof Error ? error.message : String(error);
- 				throw new StructuredSubagentError(
- 					"isolation",
--					`Isolated subagent execution requires a git repository. ${message}`,
-+					`Isolated subagent execution requires a version-controlled workspace (git checkout or git-backed jj). ${message}`,
- 					{ cause: error },
- 				);
- 			}
 diff --git a/packages/coding-agent/src/task/vcs-jj.ts b/packages/coding-agent/src/task/vcs-jj.ts
 new file mode 100644
-index 000000000..d839f86ac
+index 0000000..368c03d
 --- /dev/null
 +++ b/packages/coding-agent/src/task/vcs-jj.ts
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,399 @@
 +/**
 + * jj-workspace implementation of the {@link VcsHandle} seam.
 + *
@@ -86,6 +82,11 @@ index 000000000..d839f86ac
 + *     a pre-validated merge, inside a fresh `jj new` landing commit — on any
 + *     conflict nothing is written at all (jj's op log covers the rest).
 + *
++ * Mutations go through the `jj`/`git` CLIs on purpose: the native jj layer
++ * (`@oh-my-pi/pi-natives/vcs`) is read-only for jj workspaces, and the CLI
++ * `jj` snapshot/`new`/`abandon` semantics are the contract this handle
++ * depends on. Workspace discovery uses the native layer.
++ *
 + * Capture:    baseline = `@` commit id (jj auto-snapshots on read).
 + * Merge-back: `git merge-tree --write-tree` (3-way, in-store, no worktree)
 + *             → clean: materialize via `git apply`, snapshot with `jj st`;
@@ -98,7 +99,7 @@ index 000000000..d839f86ac
 +import * as fs from "node:fs/promises";
 +import * as os from "node:os";
 +import * as path from "node:path";
-+import * as jj from "../utils/jj";
++import * as vcs from "@oh-my-pi/pi-natives/vcs";
 +import type { TaskRefMergeSpec, VcsHandle } from "./vcs";
 +import {
 +	type CommitToBranchResult,
@@ -145,9 +146,29 @@ index 000000000..d839f86ac
 +	return result;
 +}
 +
++/** Run a checked `jj` command in `root` and return its stdout. */
++async function runJj(root: string, args: string[]): Promise<string> {
++	const child = Bun.spawn(["jj", ...args], {
++		cwd: root,
++		stdin: "ignore",
++		stdout: "pipe",
++		stderr: "pipe",
++		windowsHide: true,
++	});
++	const [stdout, stderr, exitCode] = await Promise.all([
++		new Response(child.stdout).text(),
++		new Response(child.stderr).text(),
++		child.exited,
++	]);
++	if ((exitCode ?? 0) !== 0) {
++		throw new Error(`jj ${args.join(" ")} failed (exit ${exitCode ?? 0}): ${stderr.trim() || stdout.trim()}`);
++	}
++	return stdout;
++}
++
 +/** `@` commit id of the workspace; any jj read snapshots the working copy first. */
 +async function workingCopyCommitId(root: string): Promise<string> {
-+	return (await jj.exec(root, ["log", "-r", "@", "--no-graph", "-T", "commit_id"])).trim();
++	return (await runJj(root, ["log", "-r", "@", "--no-graph", "-T", "commit_id"])).trim();
 +}
 +
 +/**
@@ -186,11 +207,11 @@ index 000000000..d839f86ac
 +
 +/** jj-side commit identity for synthetic task commits; falls back to a fixed ident. */
 +async function commitIdentEnv(root: string): Promise<Record<string, string>> {
-+	const name = await jj.exec(root, ["config", "get", "user.name"]).then(
++	const name = await runJj(root, ["config", "get", "user.name"]).then(
 +		out => out.trim() || "OMP Task",
 +		() => "OMP Task",
 +	);
-+	const email = await jj.exec(root, ["config", "get", "user.email"]).then(
++	const email = await runJj(root, ["config", "get", "user.email"]).then(
 +		out => out.trim() || "omp-task@localhost",
 +		() => "omp-task@localhost",
 +	);
@@ -272,7 +293,11 @@ index 000000000..d839f86ac
 +				conflict = message;
 +			};
 +
-+			const taskSha = (await runGit(this.gitDir, ["rev-parse", "--verify", `${taskBranchRef(ref.branchName)}^{commit}`], { allowFailure: true })).stdout.trim();
++			const taskSha = (
++				await runGit(this.gitDir, ["rev-parse", "--verify", `${taskBranchRef(ref.branchName)}^{commit}`], {
++					allowFailure: true,
++				})
++			).stdout.trim();
 +			if (!taskSha) {
 +				fail(`Task ref ${ref.branchName} not found in the backing store.`);
 +				break;
@@ -304,7 +329,7 @@ index 000000000..d839f86ac
 +			}
 +
 +			const message = ref.description?.trim() || `omp task ${ref.taskId}`;
-+			await jj.exec(this.root, ["new", "-m", message]);
++			await runJj(this.root, ["new", "-m", message]);
 +			const patchFile = path.join(os.tmpdir(), `omp-jj-land-${Date.now()}-${index}.patch`);
 +			await fs.writeFile(patchFile, patch);
 +			try {
@@ -316,7 +341,7 @@ index 000000000..d839f86ac
 +				if (apply.exitCode !== 0) {
 +					// git-apply is atomic: nothing was written. Drop the empty
 +					// landing commit and park the ref for manual resolution.
-+					await jj.exec(this.root, ["abandon", "@"]);
++					await runJj(this.root, ["abandon", "@"]);
 +					fail(
 +						`Applying merged tree of ${ref.branchName} failed (workspace changed mid-merge?): ${apply.stderr.trim()}`,
 +					);
@@ -326,7 +351,7 @@ index 000000000..d839f86ac
 +				await fs.rm(patchFile, { force: true });
 +			}
 +			// Snapshot the landing commit so the merge is visible in jj history.
-+			await jj.exec(this.root, ["status"]);
++			await runJj(this.root, ["status"]);
 +			merged.push(ref.branchName);
 +		}
 +
@@ -337,6 +362,28 @@ index 000000000..d839f86ac
 +		for (const branchName of branchNames) {
 +			await runGit(this.gitDir, ["update-ref", "-d", taskBranchRef(branchName)], { allowFailure: true });
 +		}
++	}
++
++	async rescueTaskRef(branchName: string, baseSha: string): Promise<string | undefined> {
++		// Same contract as the git handle (#8868): keep the ref when it holds
++		// commits past the baseline — the isolation snapshot is about to die.
++		const probe = await runGit(
++			this.gitDir,
++			["rev-list", "--count", `${baseSha}..${taskBranchRef(branchName)}`],
++			{ allowFailure: true },
++		);
++		if (probe.exitCode !== 0) {
++			const exists = await runGit(
++				this.gitDir,
++				["rev-parse", "--verify", `${taskBranchRef(branchName)}^{commit}`],
++				{ allowFailure: true },
++			);
++			if (exists.exitCode === 0) return branchName;
++		} else if (Number.parseInt(probe.stdout.trim(), 10) > 0) {
++			return branchName;
++		}
++		await this.cleanupTaskRefs([branchName]);
++		return undefined;
 +	}
 +
 +	async canApplyPatch(patchText: string, options?: { reverse?: boolean }): Promise<boolean> {
@@ -371,7 +418,7 @@ index 000000000..d839f86ac
 +			await fs.rm(patchFile, { force: true });
 +		}
 +		// Fold the applied patch into jj's working-copy commit.
-+		await jj.exec(this.root, ["status"]);
++		await runJj(this.root, ["status"]);
 +	}
 +
 +	async applyNestedPatches(
@@ -397,15 +444,16 @@ index 000000000..d839f86ac
 + * Throws when the workspace uses a non-git jj backend.
 + */
 +export async function resolveJjWorkspaceHandle(cwd: string): Promise<JjWorkspaceHandle> {
-+	const repo = await jj.repo.resolve(cwd);
-+	if (!repo) throw new Error("Jujutsu workspace not found for isolated task execution.");
++	const workspace = vcs.jj(cwd);
++	if (!workspace) throw new Error("Jujutsu workspace not found for isolated task execution.");
 +
++	const storeDir = workspace.storeDir();
 +	let gitDir: string | null = null;
-+	const targetFile = path.join(repo.storeDir, "git_target");
++	const targetFile = path.join(storeDir, "git_target");
 +	try {
-+		gitDir = path.resolve(repo.storeDir, (await fs.readFile(targetFile, "utf8")).trim());
++		gitDir = path.resolve(storeDir, (await fs.readFile(targetFile, "utf8")).trim());
 +	} catch {
-+		const fallback = path.join(repo.storeDir, "git");
++		const fallback = path.join(storeDir, "git");
 +		gitDir = (await fs.stat(fallback).catch(() => null))?.isDirectory() ? fallback : null;
 +	}
 +	if (!gitDir || !(await fs.stat(gitDir).catch(() => null))?.isDirectory()) {
@@ -413,22 +461,28 @@ index 000000000..d839f86ac
 +			"Isolated task execution requires a git-backed Jujutsu workspace; this workspace's store has no git backend.",
 +		);
 +	}
-+	return new JjWorkspaceHandle(repo.repoRoot, gitDir);
++	return new JjWorkspaceHandle(workspace.root(), gitDir);
 +}
 diff --git a/packages/coding-agent/src/task/vcs.ts b/packages/coding-agent/src/task/vcs.ts
-index d1949ebfe..6e7d4b897 100644
+index a78cbc9..cf3704b 100644
 --- a/packages/coding-agent/src/task/vcs.ts
 +++ b/packages/coding-agent/src/task/vcs.ts
-@@ -18,6 +18,8 @@
-  * existing machinery in `worktree.ts` / `utils/git.ts` unchanged.
+@@ -14,10 +14,12 @@
+  * resolving their shared backing git store) can plug in without touching the
+  * isolation lifecycle in `isolation-runner.ts` or its callers.
+  *
+- * `GitCheckoutHandle` is the only implementation today and delegates to the
+- * existing machinery in `worktree.ts` / `@oh-my-pi/pi-natives/vcs` unchanged.
++ * `GitCheckoutHandle` delegates to the existing machinery in `worktree.ts` /
++ * `@oh-my-pi/pi-natives/vcs` unchanged; `JjWorkspaceHandle` (vcs-jj.ts)
++ * covers pure jj workspaces via their backing git store.
   */
- import * as git from "../utils/git";
-+import * as jj from "../utils/jj";
+ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 +import { resolveJjWorkspaceHandle } from "./vcs-jj";
  import {
  	applyNestedPatches,
  	captureBaseline,
-@@ -48,7 +50,7 @@ export interface TaskRefMergeSpec {
+@@ -49,7 +51,7 @@ export interface TaskRefMergeSpec {
   */
  export interface VcsHandle {
  	/** Backend discriminator; drives capability checks and user messaging. */
@@ -437,7 +491,7 @@ index d1949ebfe..6e7d4b897 100644
  	/** Workspace root — the directory the PAL snapshots and merges land in. */
  	readonly root: string;
  
-@@ -81,6 +83,13 @@ export interface VcsHandle {
+@@ -89,6 +91,13 @@ export interface VcsHandle {
  		patches: NestedRepoPatch[],
  		commitMessage?: (diff: string) => Promise<string | null>,
  	): Promise<string[]>;
@@ -450,8 +504,8 @@ index d1949ebfe..6e7d4b897 100644
 +	prepareIsolationDir?(isolationDir: string): Promise<void>;
  }
  
- /** Plain git checkout — delegates to the existing worktree/git machinery. */
-@@ -133,11 +142,16 @@ export class GitCheckoutHandle implements VcsHandle {
+ /** Plain git checkout — delegates to the existing worktree/native machinery. */
+@@ -164,11 +173,16 @@ export class GitCheckoutHandle implements VcsHandle {
  /**
   * Resolve the VCS handle for isolated task execution at `cwd`.
   *
@@ -465,17 +519,17 @@ index d1949ebfe..6e7d4b897 100644
 + * root and stay on the proven git path.
   */
  export async function resolveVcsHandle(cwd: string): Promise<VcsHandle> {
-+	if (await jj.isPureJjRepo(cwd)) {
++	if (vcs.isPureJj(cwd)) {
 +		return resolveJjWorkspaceHandle(cwd);
 +	}
  	const root = await getRepoRoot(cwd);
  	return new GitCheckoutHandle(root);
  }
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 63294239e..d8edec958 100644
+index ad30279..ec3787e 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -419,12 +419,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
+@@ -494,13 +494,17 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
  	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
  }
  
@@ -491,32 +545,16 @@ index 63294239e..d8edec958 100644
  	preferred?: IsoBackendKind,
  ): Promise<IsolationHandle> {
 -	const repoRoot = await getRepoRoot(baseCwd);
- 	const repository = await git.repo.resolve(repoRoot);
- 	const sourceCommonDir = repository?.commonDir ?? path.join(repoRoot, ".git");
+-	const sourceCommonDir = vcs.requireGit(repoRoot).info().commonDir;
++	const sourceCommonDir = vcs.git(repoRoot)?.info().commonDir ?? path.join(repoRoot, ".git");
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
-diff --git a/packages/coding-agent/src/utils/jj.ts b/packages/coding-agent/src/utils/jj.ts
-index baf80b297..03abf7e59 100644
---- a/packages/coding-agent/src/utils/jj.ts
-+++ b/packages/coding-agent/src/utils/jj.ts
-@@ -142,6 +142,13 @@ async function runOptionalText(
- 	}
- }
- 
-+/**
-+ * Run a checked `jj` command and return its stdout. Public escape hatch for
-+ * workspace-level operations (snapshot, `new`, `abandon`) driven by the
-+ * isolated-task VCS handle.
-+ */
-+export const exec = runText;
-+
- function splitLines(text: string): string[] {
- 	return text
- 		.split("\n")
+ 	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
+ 	const resolution = natives.isoResolve(preferred ?? null);
 diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
-index baff511bc..52cc28661 100644
+index 79b2e7c..48af776 100644
 --- a/packages/coding-agent/test/task/isolation-runner.test.ts
 +++ b/packages/coding-agent/test/task/isolation-runner.test.ts
-@@ -7,6 +7,7 @@ import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+@@ -8,6 +8,7 @@ import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
  import {
  	applyEligibleNestedPatches,
  	mergeIsolatedChanges,
@@ -524,7 +562,7 @@ index baff511bc..52cc28661 100644
  	runIsolatedSubprocess,
  } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
  import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-@@ -408,3 +409,96 @@ describe("applyEligibleNestedPatches", () => {
+@@ -660,3 +661,96 @@ describe("applyEligibleNestedPatches", () => {
  		expect(suffix).toContain("<system-notification>");
  	});
  });
@@ -621,21 +659,8 @@ index baff511bc..52cc28661 100644
 +		expect(log).toContain("omp task JjE2E");
 +	});
 +});
-diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
-index a24facde7..e1376822b 100644
---- a/packages/coding-agent/test/task/structured-subagent.test.ts
-+++ b/packages/coding-agent/test/task/structured-subagent.test.ts
-@@ -375,7 +375,7 @@ describe("structured subagent primitive", () => {
- 			runStructuredSubagent(
- 				request({ session: session({ isolationMode: "worktree" }), isolation: { requested: true } }),
- 			),
--		).rejects.toThrow("Isolated subagent execution requires a git repository");
-+		).rejects.toThrow("Isolated subagent execution requires a version-controlled workspace");
- 		expect(artifactsDirsFromRegistry()).toEqual([]);
- 	});
- 
 diff --git a/packages/coding-agent/test/task/vcs.test.ts b/packages/coding-agent/test/task/vcs.test.ts
-index 0760f0e40..bfdbf9e84 100644
+index 0760f0e..bfdbf9e 100644
 --- a/packages/coding-agent/test/task/vcs.test.ts
 +++ b/packages/coding-agent/test/task/vcs.test.ts
 @@ -73,7 +73,7 @@ describe("resolveVcsHandle", () => {
@@ -850,10 +875,10 @@ index 0760f0e40..bfdbf9e84 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 1be2f9fd1..7a3940276 100644
+index 32e7762..fbeca8b 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -152,6 +152,27 @@ describe("worktree isolation helpers", () => {
+@@ -190,6 +190,27 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fallbackReason).toBe(unavailable.message);
  		});
  

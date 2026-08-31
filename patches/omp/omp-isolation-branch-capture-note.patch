@@ -2,7 +2,7 @@ afk: the apply=false capture note names a branch->patch downgrade
 loudly instead of rendering it as a normal patch capture.
 
 Motivation: when task.isolation.merge is pinned to `branch` and
-commitToTaskRef throws, isolation-runner falls back to writing a
+commitToBranch throws (renamed from commitToTaskRef in 18.x), isolation-runner falls back to writing a
 `<id>.patch` artifact and sets result.error = "Merge failed: ...".
 Under apply: false, structured-subagent's summary then read
 "Isolation: changes captured at `<id>.patch` (apply=false). Not
@@ -25,16 +25,16 @@ What must survive a rebase:
   original quiet wording.
 
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index f08361c..3dbf2d3 100644
+index e5189d0..63d2d99 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -626,10 +626,19 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -643,10 +643,19 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
  			if (result.branchName)
  				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
 +			else if (result.patchPath && policy.mergeMode === "branch")
 +				// A configured branch capture that produced a patch artifact is a
-+				// DOWNGRADE (commitToTaskRef threw; isolation-runner fell back to a
++				// DOWNGRADE (commitToBranch threw; isolation-runner fell back to a
 +				// patch). Without result.error in the note the summary is
 +				// indistinguishable from a configured patch-mode run — which is how
 +				// 97 downgraded captures went unnoticed for three days.

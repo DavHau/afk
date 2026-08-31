@@ -6,7 +6,11 @@
 # (isolation orchestration split into task/isolation-runner.ts; upstream added
 # deferred-cleanup tracking and streamed tool-call id re-keying), then 17.2.14
 # (two personal patches rebased back in: the Anthropic weekly-reset ranking
-# and the status-line account email — see below) in patches/omp/.
+# and the status-line account email), then 18.0.11 (upstream moved ALL VCS
+# operations in-process behind @oh-my-pi/pi-natives/vcs — gitoxide/jj-lib —
+# deleting the TS utils/git.ts/utils/jj.ts façades; the whole jj patch family
+# was re-cut against the native layer, raw refs/omp/* plumbing now shells to
+# `git update-ref` since the natives hardcode refs/heads/) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -90,11 +94,14 @@
 # - omp-anthropic-weekly-reset-priority: Claude subscriptions rank OAuth
 #   accounts by their soonest shared 7d window reset (60s tie tolerance)
 #   instead of by required drain of expiring headroom, plus
-#   sessionStickyOnly identity lookups and pinSessionCredential() (which
-#   also clears the credential's rate-limit blocks). Resurrected from the
-#   hyperconfig 16.3.x personal patch set after the afk consolidation;
-#   17.2.14's deterministic ranking (session-hash + orderPos tiebreak) made
-#   the old weighted-sampling test expectations obsolete.
+#   sessionStickyOnly identity lookups. Resurrected from the hyperconfig
+#   16.3.x personal patch set after the afk consolidation; 17.2.14's
+#   deterministic ranking (session-hash + orderPos tiebreak) made the old
+#   weighted-sampling test expectations obsolete. 18.x absorbed the old
+#   pinSessionCredential() API as upstream pinSessionOAuthAccount (wired to
+#   /account); the patch now only folds the remaining delta into it —
+#   clearing the pinned credential's reactive rate-limit blocks on fresh
+#   manual pins (persisted-session restores keep their blocks).
 # - omp-statusline-anthropic-account: the cost segment appends the
 #   session-sticky Anthropic OAuth account email (dimmed, 40-col truncated)
 #   so the TUI shows which account a multi-subscription session is billed

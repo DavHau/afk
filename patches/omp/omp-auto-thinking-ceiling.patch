@@ -9,7 +9,7 @@ What must survive a rebase:
   keyword (clamped at its own call site), still reach the model's max.
 
 diff --git a/packages/coding-agent/src/auto-thinking/classifier.ts b/packages/coding-agent/src/auto-thinking/classifier.ts
-index 70a00f3a3..2787b9265 100644
+index 70ac125..d690a59 100644
 --- a/packages/coding-agent/src/auto-thinking/classifier.ts
 +++ b/packages/coding-agent/src/auto-thinking/classifier.ts
 @@ -39,14 +39,17 @@ import { tinyModelClient } from "../tiny/title-client";
@@ -37,7 +37,7 @@ index 70a00f3a3..2787b9265 100644
  }
  
  function difficultySystemPromptFor(ceiling: Effort): string {
-@@ -91,10 +94,9 @@ export async function classifyDifficulty(
+@@ -101,10 +104,9 @@ export async function classifyDifficulty(
  	const backend = deps.settings.get("providers.autoThinkingModel");
  	const input = preprocessTinyMessage(promptText);
  	const online = backend === ONLINE_AUTO_THINKING_MODEL_KEY;
@@ -52,10 +52,10 @@ index 70a00f3a3..2787b9265 100644
  	// The ceiling goes into the clamp itself: capping the request alone is not
  	// enough, because a sparse ladder snaps an excluded request back up.
 diff --git a/packages/coding-agent/test/auto-thinking-classifier.test.ts b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-index d579f46f8..263a58b54 100644
+index 89d3e41..da8e467 100644
 --- a/packages/coding-agent/test/auto-thinking-classifier.test.ts
 +++ b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-@@ -277,11 +277,14 @@ describe("auto thinking classifier helpers", () => {
+@@ -231,11 +231,14 @@ describe("auto thinking classifier helpers", () => {
  	const MAX_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
  	const XHIGH_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
  
@@ -72,7 +72,7 @@ index d579f46f8..263a58b54 100644
  
  		vi.restoreAllMocks();
  
-@@ -299,20 +302,19 @@ describe("auto thinking classifier helpers", () => {
+@@ -253,20 +256,19 @@ describe("auto thinking classifier helpers", () => {
  		expect(unsupportedRequest.systemPrompt[0]).not.toMatch(/\bmax\b/);
  	});
  
@@ -98,7 +98,7 @@ index d579f46f8..263a58b54 100644
  	});
  
  	it("takes the first label when the classifier echoes several", async () => {
-@@ -326,13 +328,13 @@ describe("auto thinking classifier helpers", () => {
+@@ -280,13 +282,13 @@ describe("auto thinking classifier helpers", () => {
  		expect(await classifyDifficulty("rename a helper", fixture.deps)).toBe(Effort.Low);
  	});
  
@@ -116,7 +116,7 @@ index d579f46f8..263a58b54 100644
  		// must not snap the request back up — auto yields nothing and the session
  		// keeps its current level.
  		const defaulted = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "xhigh");
-@@ -341,7 +343,7 @@ describe("auto thinking classifier helpers", () => {
+@@ -295,7 +297,7 @@ describe("auto thinking classifier helpers", () => {
  		vi.restoreAllMocks();
  
  		const optedIn = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "max", "max");
@@ -125,7 +125,7 @@ index d579f46f8..263a58b54 100644
  	});
  
  	it("has no provisional level on a max-only ladder", () => {
-@@ -379,6 +381,45 @@ describe("auto thinking classifier helpers", () => {
+@@ -333,6 +335,45 @@ describe("auto thinking classifier helpers", () => {
  		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);
  	});
  

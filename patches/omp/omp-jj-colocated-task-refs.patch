@@ -17,12 +17,21 @@ What must survive a rebase:
 - The ref must stay cherry-pickable and listable via
   `git for-each-ref refs/omp/task` (profile/rules/isolated-task-merge.md
   and the superpowers skill patches depend on that contract).
+- Since 18.0.11 the VCS layer is native (gitoxide via
+  @oh-my-pi/pi-natives/vcs) and its createBranch/deleteBranch hardcode
+  refs/heads/, so worktree.ts carries its own gitUpdateRef/gitTryDeleteRef
+  helpers shelling to `git update-ref` (the binary upstream still requires
+  for fetch/push/clone). Detached temp worktrees are checked out at the
+  resolved ref sha (resolveTaskRefSha) and the ref is advanced explicitly
+  after each commit (advanceTaskRef). 18.x also added rescueTaskBranch
+  (isolation-runner.ts, #8868) — it must probe/delete the HIDDEN ref, not
+  refs/heads/.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index c206198d9..45e320f1e 100644
+index 9103cd8..f8a4dbc 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -112,14 +112,14 @@ Artifacts and side channels:
+@@ -112,7 +112,7 @@ Artifacts and side channels:
    - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `outputSchema`, and `schemaMode` per item. `effort` appears only when its setting enables it; `isolated` also requires plan mode to be disabled. Lifecycle, revival, and concurrency semantics match N parallel single calls.
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Isolation mode (`task.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
@@ -30,7 +39,8 @@ index c206198d9..45e320f1e 100644
 +- Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command).
  - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `designer`, `reviewer`, `security-reviewer`, `librarian`, `task`, `sonic`).
  - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
- 
+ - Advisor: agent frontmatter `advisor` or `task.agentAdvisor[agentName]` (`"on"` / `"off"` / model pattern) pairs the child session with an advisor; an explicit pattern lands on the child's `modelRoles.advisor`. Subagents default to no advisor.
+@@ -120,7 +120,7 @@ Artifacts and side channels:
  ## Side Effects
  - Filesystem
    - Writes `<id>.jsonl` and `<id>.md` under the session artifacts dir or a temp task dir; isolated patch mode writes `<id>.patch`.
@@ -40,29 +50,64 @@ index c206198d9..45e320f1e 100644
    - Child sessions may use whichever networked tools/models their active tool set permits.
    - MCP proxy tools can call existing parent MCP connections with a 60_000 ms timeout.
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 4d492bf90..abcd519bc 100644
+index 71d12b0..bf82834 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -189,9 +189,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 					nestedPatches: commitResult?.nestedPatches,
- 				});
- 			} catch (mergeErr) {
--				// Agent succeeded but branch commit failed — clean up stale branch.
--				const branchName = `omp/task/${opts.agentId}`;
--				await git.branch.tryDelete(opts.context.repoRoot, branchName);
-+				// Agent succeeded but branch commit failed — clean up stale task ref
-+				await cleanupTaskBranches(opts.context.repoRoot, [`omp/task/${opts.agentId}`]);
- 				const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
- 				try {
- 					const patchResult = await writeIsolationPatch(
+@@ -40,6 +40,7 @@ import {
+ 	type IsolationHandle,
+ 	mergeTaskBranches,
+ 	type NestedRepoPatch,
++	taskBranchRef,
+ 	type WorktreeBaseline,
+ } from "./worktree";
+ 
+@@ -63,30 +64,29 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
+  * a branch that is absent, empty, or still pinned at the baseline, preserving
+  * the original stale-branch cleanup for the cases where nothing is at stake.
+  *
+- * `revList.range` throws when the branch does not exist, which is the common
++ * `revList.range` throws when the ref does not exist, which is the common
+  * "commitToBranch failed before it created anything" path; that is treated as
+  * "nothing to rescue" only after confirming the ref is absent. Other probe
+- * failures preserve the branch because deleting it could lose the only reachable
++ * failures preserve the ref because deleting it could lose the only reachable
+  * copy of the agent's commits.
+  */
+ async function rescueTaskBranch(repoRoot: string, branchName: string, baseSha: string): Promise<string | undefined> {
+ 	const repo = vcs.git(repoRoot);
++	// Task refs live at `refs/omp/task/<id>`, outside `refs/heads/`, so a
++	// colocated jj checkout never imports (and later abandons) them.
++	const tipRef = taskBranchRef(branchName);
+ 	try {
+-		const carriedCommits = (await vcs.requireGit(repoRoot).revListRange(baseSha, branchName)).length;
++		const carriedCommits = (await vcs.requireGit(repoRoot).revListRange(baseSha, tipRef)).length;
+ 		if (carriedCommits > 0) return branchName;
+ 	} catch {
+ 		try {
+-			if (await repo?.refExists(`refs/heads/${branchName}`)) return branchName;
++			if (await repo?.refExists(tipRef)) return branchName;
+ 		} catch {
+ 			// An inconclusive recovery probe must never risk deleting the only ref.
+ 			return branchName;
+ 		}
+ 	}
+-	try {
+-		await repo?.deleteBranch(branchName, true);
+-	} catch {
+-		// Best-effort cleanup matches the old façade's tryDelete semantics.
+-	}
++	await cleanupTaskBranches(repoRoot, [branchName]);
+ 	return undefined;
+ }
+ 
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index ecb26de15..63294239e 100644
+index 1961d14..ad30279 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -504,6 +504,34 @@ export interface CommitToBranchResult {
- 	 */
+@@ -579,6 +579,78 @@ export interface CommitToBranchResult {
  	baseSha?: string;
  }
+ 
 +/**
 + * Full ref name for a task branch. Task refs live OUTSIDE `refs/heads/` on
 + * purpose: in a colocated jj checkout, jj imports `refs/heads/*` on every
@@ -82,132 +127,168 @@ index ecb26de15..63294239e 100644
 +}
 +
 +/**
-+ * Point the task ref at the temp worktree's HEAD after a commit landed
-+ * there. Detached temp worktrees don't advance any ref on commit, so the
-+ * ref move is explicit.
++ * Raw ref plumbing for the hidden `refs/omp/…` namespace. The native layer's
++ * `createBranch`/`deleteBranch` hardcode `refs/heads/` (gitoxide-side), so
++ * refs outside that namespace go through the git CLI — the binary upstream
++ * already requires for fetch/push/clone. `git update-ref` handles loose,
++ * packed, and reftable ref stores uniformly.
++ */
++async function gitUpdateRef(repoRoot: string, refName: string, commitSha: string): Promise<void> {
++	const proc = Bun.spawn(["git", "update-ref", refName, commitSha], {
++		cwd: repoRoot,
++		stdout: "ignore",
++		stderr: "pipe",
++		windowsHide: true,
++	});
++	const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
++	if (exitCode !== 0) {
++		throw new Error(`git update-ref ${refName} failed: ${stderr.trim() || `exit code ${exitCode}`}`);
++	}
++}
++
++/** Delete a ref by full name. Returns false on failure instead of throwing. */
++async function gitTryDeleteRef(repoRoot: string, refName: string): Promise<boolean> {
++	const proc = Bun.spawn(["git", "update-ref", "-d", refName], {
++		cwd: repoRoot,
++		stdout: "ignore",
++		stderr: "ignore",
++		windowsHide: true,
++	});
++	return (await proc.exited) === 0;
++}
++
++/**
++ * Detached temp worktrees don't advance any ref on commit, so the ref move
++ * is explicit: point the task ref at the temp worktree's HEAD after a commit
++ * landed there.
 + */
 +async function advanceTaskRef(repoRoot: string, tmpDir: string, branchName: string, taskId: string): Promise<void> {
-+	const tip = await git.head.sha(tmpDir);
++	const tip = await vcs.requireGit(tmpDir).headSha();
 +	if (!tip) throw new Error(`task ${taskId}: temp worktree HEAD unresolvable after branch commit`);
-+	await git.ref.update(repoRoot, taskBranchRef(branchName), tip);
++	await gitUpdateRef(repoRoot, taskBranchRef(branchName), tip);
 +}
- 
++
++/**
++ * Resolve the commit a task ref points at, for detached worktree checkouts.
++ * Fully-qualified `refs/…` names bypass gix rev-parse (which only follows
++ * the `refs/heads/` shorthand), so hidden `refs/omp/task/*` refs resolve on
++ * every ref-store backend.
++ */
++async function resolveTaskRefSha(repo: VcsGitRepo, branchName: string, taskId: string): Promise<string> {
++	const sha = await repo.resolveRef(taskBranchRef(branchName));
++	if (!sha) throw new Error(`task ${taskId}: task ref ${taskBranchRef(branchName)} unresolvable`);
++	return sha;
++}
++
  function baselineHasRootWip(baseline: RepoBaseline): boolean {
  	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
-@@ -665,11 +693,11 @@ interface FilteredAgentReplayOptions {
- 
- async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Promise<void> {
+ }
+@@ -743,11 +815,11 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  	const baselineSha = opts.baseline.root.headCommit;
--	await git.branch.create(opts.repoRoot, opts.branchName, baselineSha);
-+	await git.ref.update(opts.repoRoot, taskBranchRef(opts.branchName), baselineSha);
+ 	const repo = vcs.requireGit(opts.repoRoot);
+ 	const isolationRepo = vcs.requireGit(opts.isolationDir);
+-	await repo.createBranch(opts.branchName, baselineSha, false);
++	await gitUpdateRef(opts.repoRoot, taskBranchRef(opts.branchName), baselineSha);
  
  	const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  	try {
--		await git.worktree.add(opts.repoRoot, tmpDir, opts.branchName);
-+		await git.worktree.add(opts.repoRoot, tmpDir, opts.branchName, { detach: true });
- 		const agentCommits = await git.revList.range(opts.isolationDir, baselineSha, opts.isolationHead);
+-		await repo.worktreeAdd(tmpDir, opts.branchName, false);
++		await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, opts.branchName, opts.taskId), true);
+ 		const agentCommits = await isolationRepo.revListRange(baselineSha, opts.isolationHead);
  		const baselineWip = [opts.baseline.root.staged, opts.baseline.root.unstaged, opts.baseline.root.untrackedPatch];
  		// Seed the parent ODB with the dirty-side blobs needed by `git apply
-@@ -734,6 +762,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+@@ -803,6 +875,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  				await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
  			}
  		}
 +		await advanceTaskRef(opts.repoRoot, tmpDir, opts.branchName, opts.taskId);
  	} finally {
- 		await git.worktree.tryRemove(opts.repoRoot, tmpDir);
+ 		await tryRemoveWorktree(repo, tmpDir);
  		await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -797,9 +826,9 @@ export async function commitToBranch(
+@@ -868,9 +941,9 @@ export async function commitToBranch(
  		} else {
  			// Transfer the agent's commit objects (which live in isolation's `.git`,
  			// stranded once `cleanupIsolation` tears the overlay down) into the parent
 -			// repo's object DB and create the branch at the agent's HEAD. `+HEAD:…`
 -			// force-overwrites a stale branch from a prior run.
--			await git.fetch(repoRoot, isolationDir, "HEAD", `refs/heads/${branchName}`);
+-			await repo.fetch(isolationDir, "HEAD", `refs/heads/${branchName}`, GIT_NETWORK_TIMEOUT_MS);
 +			// repo's object DB and create the task ref at the agent's HEAD. `+HEAD:…`
 +			// force-overwrites a stale ref from a prior run.
-+			await git.fetch(repoRoot, isolationDir, "HEAD", taskBranchRef(branchName));
++			await repo.fetch(isolationDir, "HEAD", taskBranchRef(branchName), GIT_NETWORK_TIMEOUT_MS);
  
  			// Leftover = anything still uncommitted in isolation on top of the
  			// agent's last commit (staged, unstaged, untracked). The agent didn't
-@@ -815,9 +844,10 @@ export async function commitToBranch(
+@@ -886,9 +959,10 @@ export async function commitToBranch(
  			if (leftoverPatch.trim()) {
  				const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  				try {
--					await git.worktree.add(repoRoot, tmpDir, branchName);
-+					await git.worktree.add(repoRoot, tmpDir, branchName, { detach: true });
+-					await repo.worktreeAdd(tmpDir, branchName, false);
++					await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, branchName, taskId), true);
  					const msg = (commitMessage && (await commitMessage(leftoverPatch))) || fallbackMessage;
  					await commitPatchToBranchWorktree(tmpDir, taskId, leftoverPatch, msg);
 +					await advanceTaskRef(repoRoot, tmpDir, branchName, taskId);
  				} finally {
- 					await git.worktree.tryRemove(repoRoot, tmpDir);
+ 					await tryRemoveWorktree(repo, tmpDir);
  					await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -826,15 +856,16 @@ export async function commitToBranch(
+@@ -897,15 +971,16 @@ export async function commitToBranch(
  		}
  		branchCreated = true;
  	} else if (rootPatch.trim()) {
--		await git.branch.create(repoRoot, branchName, baselineSha);
-+		await git.ref.update(repoRoot, taskBranchRef(branchName), baselineSha);
+-		await repo.createBranch(branchName, baselineSha, false);
++		await gitUpdateRef(repoRoot, taskBranchRef(branchName), baselineSha);
  		branchCreated = true;
  		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  		try {
--			await git.worktree.add(repoRoot, tmpDir, branchName);
-+			await git.worktree.add(repoRoot, tmpDir, branchName, { detach: true });
+-			await repo.worktreeAdd(tmpDir, branchName, false);
++			await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, branchName, taskId), true);
  
  			const msg = (commitMessage && (await commitMessage(rootPatch))) || fallbackMessage;
  			const wip = baselineHasRootWip(baseline.root) ? baseline.root : undefined;
  			await commitPatchToBranchWorktree(tmpDir, taskId, rootPatch, msg, undefined, wip);
 +			await advanceTaskRef(repoRoot, tmpDir, branchName, taskId);
  		} finally {
- 			await git.worktree.tryRemove(repoRoot, tmpDir);
+ 			await tryRemoveWorktree(repo, tmpDir);
  			await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -885,7 +916,10 @@ export async function mergeTaskBranches(
+@@ -957,7 +1032,10 @@ export async function mergeTaskBranches(
  		try {
  			for (const { branchName, baseSha } of branches) {
  				try {
--					const target = baseSha ? `${baseSha}..${branchName}` : branchName;
+-					const revisions = baseSha ? await repo.revListRange(baseSha, branchName) : [branchName];
 +					// Resolve the hidden task ref explicitly; fall back to the raw
 +					// name for legacy callers that pass a real branch.
-+					const tipRef = (await git.ref.exists(repoRoot, taskBranchRef(branchName))) ? taskBranchRef(branchName) : branchName;
-+					const target = baseSha ? `${baseSha}..${tipRef}` : tipRef;
- 					await git.cherryPick(repoRoot, target);
- 				} catch (initialErr) {
- 					// Empty cherry-picks are not conflicts: a commit whose net
-@@ -962,6 +996,10 @@ export async function mergeTaskBranches(
- /** Clean up temporary task branches. */
++					const tipRef = (await repo.refExists(taskBranchRef(branchName))) ? taskBranchRef(branchName) : branchName;
++					const revisions = baseSha ? await repo.revListRange(baseSha, tipRef) : [tipRef];
+ 					for (const revision of revisions) {
+ 						try {
+ 							await repo.cherryPick(revision);
+@@ -1019,6 +1097,9 @@ export async function mergeTaskBranches(
  export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
+ 	const repo = vcs.requireGit(repoRoot);
  	for (const branch of branches) {
--		await git.branch.tryDelete(repoRoot, branch);
 +		// Hidden task ref first; fall back to a real branch for refs created
 +		// by older omp versions or legacy callers.
-+		if (!(await git.ref.tryDelete(repoRoot, taskBranchRef(branch)))) {
-+			await git.branch.tryDelete(repoRoot, branch);
-+		}
- 	}
- }
-diff --git a/packages/coding-agent/src/utils/git.ts b/packages/coding-agent/src/utils/git.ts
-index 35342a75e..837b0226a 100644
---- a/packages/coding-agent/src/utils/git.ts
-+++ b/packages/coding-agent/src/utils/git.ts
-@@ -1866,6 +1866,16 @@ export const ref = {
- 		if (result.exitCode !== 0) return null;
- 		return result.stdout.trim() || null;
- 	},
-+	/** Create or force-move a ref (any namespace, e.g. `refs/omp/…`) to a commit. */
-+	async update(cwd: string, refName: string, commitSha: string, signal?: AbortSignal): Promise<void> {
-+		await runEffect(cwd, ["update-ref", refName, commitSha], { signal });
-+	},
-+
-+	/** Delete a ref by full name. Returns false on failure instead of throwing. */
-+	async tryDelete(cwd: string, refName: string, signal?: AbortSignal): Promise<boolean> {
-+		const result = await git(cwd, ["update-ref", "-d", refName], { signal });
-+		return result.exitCode === 0;
-+	},
++		if (await gitTryDeleteRef(repoRoot, taskBranchRef(branch))) continue;
+ 		try {
+ 			await repo.deleteBranch(branch, true);
+ 		} catch {
+diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
+index 66ed0c7..a879543 100644
+--- a/packages/coding-agent/test/task/isolation-runner.test.ts
++++ b/packages/coding-agent/test/task/isolation-runner.test.ts
+@@ -235,8 +235,8 @@ describe("runIsolatedSubprocess", () => {
+ 			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+ 		});
  
- 	/** Tags pointing at a ref. */
- 	async tags(cwd: string, refName = "HEAD", signal?: AbortSignal): Promise<string[]> {
+-		expect(rangeSpy).toHaveBeenCalledWith("base", "omp/task/RescueBranchCommits");
+-		expect(refSpy).toHaveBeenCalledWith("refs/heads/omp/task/RescueBranchCommits");
++		expect(rangeSpy).toHaveBeenCalledWith("base", "refs/omp/task/RescueBranchCommits");
++		expect(refSpy).toHaveBeenCalledWith("refs/omp/task/RescueBranchCommits");
+ 		expect(deleteSpy).not.toHaveBeenCalled();
+ 		expect(outcome.error).toContain("git apply --3way failed");
+ 		expect(outcome.error).toContain("preserved on branch omp/task/RescueBranchCommits");
 diff --git a/packages/coding-agent/test/task/worktree-jj-colocated.test.ts b/packages/coding-agent/test/task/worktree-jj-colocated.test.ts
 new file mode 100644
-index 000000000..c3d646014
+index 0000000..c3d6460
 --- /dev/null
 +++ b/packages/coding-agent/test/task/worktree-jj-colocated.test.ts
 @@ -0,0 +1,189 @@
@@ -401,10 +482,10 @@ index 000000000..c3d646014
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 4a38b2109..1be2f9fd1 100644
+index 8624a4d..32e7762 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -1299,4 +1299,82 @@ describe("commitToBranch preserves agent commits", () => {
+@@ -1367,4 +1367,82 @@ describe("commitToBranch preserves agent commits", () => {
  			expect(branchDiff).toContain("+agent-edit");
  		});
  	});
@@ -419,9 +500,9 @@ index 4a38b2109..1be2f9fd1 100644
 +		async function expectHiddenTaskRef(taskId: string): Promise<void> {
 +			const refName = `omp/task/${taskId}`;
 +			// Not a branch: invisible to `git branch` consumers and jj import.
-+			await expect(gitr(parent, ["show-ref", "--verify", `refs/heads/${refName}`])).rejects.toThrow();
++			await expect(runGit(parent, ["show-ref", "--verify", `refs/heads/${refName}`])).rejects.toThrow();
 +			// Still resolvable via git's refs/<name> fallback.
-+			const sha = await gitr(parent, ["rev-parse", "--verify", `${refName}^{commit}`]);
++			const sha = await runGit(parent, ["rev-parse", "--verify", `${refName}^{commit}`]);
 +			expect(sha).toMatch(/^[0-9a-f]{40}$/);
 +		}
 +
@@ -432,14 +513,14 @@ index 4a38b2109..1be2f9fd1 100644
 +			expect(merge.failed).toEqual([]);
 +			expect(merge.merged).toEqual([result.branchName!]);
 +			await cleanupTaskBranches(parent, [result.branchName!]);
-+			await expect(gitr(parent, ["rev-parse", "--verify", `${result.branchName!}^{commit}`])).rejects.toThrow();
++			await expect(runGit(parent, ["rev-parse", "--verify", `${result.branchName!}^{commit}`])).rejects.toThrow();
 +		}
 +
 +		it("keeps the ref hidden when the agent committed inside isolation", async () => {
 +			const baseline = await captureBaseline(parent);
 +			await fs.writeFile(path.join(isolation, "agent.txt"), "agent work\n");
-+			await gitr(isolation, ["add", "agent.txt"]);
-+			await gitr(isolation, ["commit", "-q", "-m", "feat: agent work"]);
++			await runGit(isolation, ["add", "agent.txt"]);
++			await runGit(isolation, ["commit", "-q", "-m", "feat: agent work"]);
 +			// Leftover on top of the commit exercises the temp-worktree append path.
 +			await fs.writeFile(path.join(isolation, "leftover.txt"), "leftover\n");
 +
@@ -470,14 +551,14 @@ index 4a38b2109..1be2f9fd1 100644
 +			// Baseline WIP in the parent forces replayFilteredAgentCommits
 +			// (same seeding as "filters baseline WIP when the agent commits").
 +			await fs.writeFile(path.join(parent, "staged.txt"), "baseline staged wip\n");
-+			await gitr(parent, ["add", "staged.txt"]);
++			await runGit(parent, ["add", "staged.txt"]);
 +			await fs.writeFile(path.join(isolation, "staged.txt"), "baseline staged wip\n");
-+			await gitr(isolation, ["add", "staged.txt"]);
++			await runGit(isolation, ["add", "staged.txt"]);
 +			const baseline = await captureBaseline(parent);
 +
 +			await fs.writeFile(path.join(isolation, "agent.txt"), "agent work\n");
-+			await gitr(isolation, ["add", "agent.txt"]);
-+			await gitr(isolation, ["commit", "-q", "-m", "feat: agent work"]);
++			await runGit(isolation, ["add", "agent.txt"]);
++			await runGit(isolation, ["commit", "-q", "-m", "feat: agent work"]);
 +
 +			const taskId = "jj-safe-replay";
 +			const result = await commitToBranch(isolation, baseline, taskId, undefined);

@@ -1,8 +1,38 @@
+afk: rebuild a streamed tool card when its name grows after first surfacing.
+
+Motivation: providers may stream a tool call whose name is still a partial
+prefix when it first surfaces, growing in later cumulative updates while the
+call id stays stable (llama.cpp's chat-diff streaming: compute_diffs
+tolerates prefix->longer name transitions and the server mints the id at
+first surfacing). ToolExecutionComponent binds its renderer to the name at
+construction, so a card created under "wri" stays on the generic fallback
+renderer and write/edit previews render blank until completion.
+
+What must survive a rebase:
+- A WeakMap (#pendingToolComponentNames) recording the name each pending
+  component was created under, written at BOTH creation sites in
+  #handleMessageUpdate: the read-group path and the ToolExecutionComponent
+  path.
+- The displacement check right after #streamedToolCallIdByIndex.set(...) in
+  the toolCall loop: if the pending component for content.id was created
+  under a different name, remove it from the chat container (guarded by
+  canRemoveBlock — upstream renamed isBlockUncommitted -> canRemoveBlock)
+  and drop its pendingTools/#toolTimelineComponents entries so the normal
+  creation path below rebuilds it under the settled name.
+- Two tests in test/modes/controllers/: event-controller-partial-name.test.ts
+  (name rebind repro) and event-controller-openai-args.test.ts (throttle-
+  parsed arguments still grow the write preview without partialJson).
+
+Rebased 17.2.14 -> 18.0.11: upstream renamed the container guard to
+canRemoveBlock (both the source hunk and the partial-name test's
+chatContainer mock updated); creation sites and loop structure otherwise
+match, offsets refreshed.
+
 diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
-index c0937abaa..06b3f6b40 100644
+index a526f0c..47ddfc3 100644
 --- a/packages/coding-agent/src/modes/controllers/event-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
-@@ -190,6 +190,13 @@ export class EventController {
+@@ -213,6 +213,13 @@ export class EventController {
  	// once instead of twice.
  	#vocalizedMessageUpdates = new WeakSet<object>();
  	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
@@ -16,7 +46,7 @@ index c0937abaa..06b3f6b40 100644
  
  	constructor(private ctx: InteractiveModeContext) {
  		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-@@ -1015,6 +1022,22 @@ export class EventController {
+@@ -1177,6 +1184,22 @@ export class EventController {
  					this.#migrateStreamedToolCallId(priorId, content.id);
  				}
  				this.#streamedToolCallIdByIndex.set(contentIndex, content.id);
@@ -29,7 +59,7 @@ index c0937abaa..06b3f6b40 100644
 +				if (boundComponent) {
 +					const boundName = this.#pendingToolComponentNames.get(boundComponent);
 +					if (boundName !== undefined && boundName !== content.name) {
-+						if (this.ctx.chatContainer.isBlockUncommitted(boundComponent)) {
++						if (this.ctx.chatContainer.canRemoveBlock(boundComponent)) {
 +							this.ctx.chatContainer.removeChild(boundComponent);
 +						}
 +						this.ctx.pendingTools.delete(content.id);
@@ -39,7 +69,7 @@ index c0937abaa..06b3f6b40 100644
  				if (content.name === "read") {
  					if (!readArgsHaveTarget(content.arguments)) {
  						// Args still streaming — defer until path is parseable so we can route to the
-@@ -1033,6 +1056,7 @@ export class EventController {
+@@ -1195,6 +1218,7 @@ export class EventController {
  							group.updateArgs(content.arguments, content.id);
  							this.ctx.pendingTools.set(content.id, group);
  							this.#toolTimelineComponents.set(content.id, group);
@@ -47,17 +77,17 @@ index c0937abaa..06b3f6b40 100644
  						}
  						continue;
  					}
-@@ -1090,6 +1114,7 @@ export class EventController {
+@@ -1251,6 +1275,7 @@ export class EventController {
  					this.ctx.chatContainer.addChild(component);
  					this.ctx.pendingTools.set(content.id, component);
  					this.#toolTimelineComponents.set(content.id, component);
 +					this.#pendingToolComponentNames.set(component, content.name);
  					this.#toolArgsReveal.bind(content.id, component);
- 					// A held completion for this call means its `tool_execution_end`
- 					// outran this streamed block (see #orphanedToolCompletions).
+ 					// A held completion settles only the new card; its user-facing
+ 					// side effects already ran on first arrival.
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 new file mode 100644
-index 000000000..bf8971e41
+index 0000000..bf8971e
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 @@ -0,0 +1,101 @@
@@ -164,7 +194,7 @@ index 000000000..bf8971e41
 +});
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 new file mode 100644
-index 000000000..1a8ed93d3
+index 0000000..e256864
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 @@ -0,0 +1,121 @@
@@ -227,7 +257,7 @@ index 000000000..1a8ed93d3
 +			removeChild(component: unknown) {
 +				removed.push(component);
 +			},
-+			isBlockUncommitted: () => true,
++			canRemoveBlock: () => true,
 +		},
 +		ui: {
 +			requestRender() {},

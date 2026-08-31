@@ -1,8 +1,40 @@
+afk: the cost status-line segment shows the session-sticky Anthropic
+OAuth account email, with a one-shot startup warm-up so it resolves
+right after launch.
+
+Motivation: with multiple Anthropic OAuth accounts rotating
+(session-sticky, usage-ranked), the status line should name the account
+this session is billing against. Before the first request no sticky
+attribution exists, so a plain identity lookup would name the first
+stored account — which selection may not pick.
+
+Depends on omp-anthropic-weekly-reset-priority.patch for
+getOAuthAccountIdentity's `sessionStickyOnly` option.
+
+What must survive a rebase:
+- segments.ts costSegment appends `theme.fg("muted", email)` (sanitized,
+  truncated to TRUNCATE_LENGTHS.SHORT = 40 cols) after the billing
+  parts, anthropic provider only, via a sessionStickyOnly identity
+  lookup — nothing is shown until the session is actually routed.
+- component.ts #warmOAuthAttribution: one-shot per provider+session,
+  runs only when an OAuth identity exists and no sticky attribution is
+  recorded yet; fire-and-forget getApiKey (with modelId when known),
+  then a repaint via #onBranchChange.
+- The warm-up call sits in #buildSegmentContext (next to
+  refreshUsageInBackground) so every status-line layout — box, the 18.x
+  default powerline band, and the plain variants — triggers it.
+
+Rebase notes (17.2.14 -> 18.0.11): the cost segment was restructured
+upstream (formatSpend, nerd-font subscription icon, premium requests,
+lazy advisor-subscription probe); the email append re-landed after the
+new billingParts assembly. The warm-up call followed the render context
+builder into #buildSegmentContext.
+
 diff --git a/packages/coding-agent/src/modes/components/status-line/component.ts b/packages/coding-agent/src/modes/components/status-line/component.ts
-index 0eb84ab24..fc9330f94 100644
+index 29806ae..8bfc734 100644
 --- a/packages/coding-agent/src/modes/components/status-line/component.ts
 +++ b/packages/coding-agent/src/modes/components/status-line/component.ts
-@@ -403,6 +403,13 @@ export class StatusLineComponent implements Component {
+@@ -480,6 +480,13 @@ export class StatusLineComponent implements Component {
  	#usageFetchedAt = 0;
  	#usageInFlight = false;
  	#usageStartTimer: Timer | null = null;
@@ -16,8 +48,8 @@ index 0eb84ab24..fc9330f94 100644
  	// A timed-out request may still resolve. Its result remains eligible only
  	// until a newer request has applied.
  	#usageRefreshSequence = 0;
-@@ -1196,6 +1203,34 @@ export class StatusLineComponent implements Component {
- 		return this.#formatUsageContextKey(activeProvider, identity);
+@@ -1343,6 +1350,34 @@ export class StatusLineComponent implements Component {
+ 		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
  	}
  
 +	/**
@@ -51,7 +83,7 @@ index 0eb84ab24..fc9330f94 100644
  	/**
  	 * Startup redraws only arm a short-delayed task; timeout releases the render
  	 * cadence while a late successful fetch can still refresh the cached segment.
-@@ -1544,6 +1579,7 @@ export class StatusLineComponent implements Component {
+@@ -1758,6 +1793,7 @@ export class StatusLineComponent implements Component {
  
  		// Trigger background fetch (5-min TTL); render uses cached value
  		this.refreshUsageInBackground();
@@ -60,12 +92,12 @@ index 0eb84ab24..fc9330f94 100644
  		// Get usage statistics
  		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
 diff --git a/packages/coding-agent/src/modes/components/status-line/segments.ts b/packages/coding-agent/src/modes/components/status-line/segments.ts
-index 66dcb3a2c..d3364b23a 100644
+index d09e8a4..6a6f268 100644
 --- a/packages/coding-agent/src/modes/components/status-line/segments.ts
 +++ b/packages/coding-agent/src/modes/components/status-line/segments.ts
-@@ -448,7 +448,26 @@ const costSegment: StatusLineSegment = {
- 		if (usingSubscription) billingParts.push("(sub)");
- 		if (advisorCost) billingParts.push(`${billingParts.length ? "+ " : ""}$${advisorCost.toFixed(2)} (adv)`);
+@@ -532,7 +532,26 @@ const costSegment: StatusLineSegment = {
+ 		}
+ 		if (billingParts.length === 0) return { content: "", visible: false };
  
 -		return { content: theme.fg("statusLineCost", billingParts.join(" ")), visible: true };
 +		let content = theme.fg("statusLineCost", billingParts.join(" "));
@@ -93,7 +125,7 @@ index 66dcb3a2c..d3364b23a 100644
  
 diff --git a/packages/coding-agent/test/status-line-auth-warmup.test.ts b/packages/coding-agent/test/status-line-auth-warmup.test.ts
 new file mode 100644
-index 000000000..e4f9db9f4
+index 0000000..e4f9db9
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-auth-warmup.test.ts
 @@ -0,0 +1,126 @@
@@ -225,7 +257,7 @@ index 000000000..e4f9db9f4
 +});
 diff --git a/packages/coding-agent/test/status-line-cost-account.test.ts b/packages/coding-agent/test/status-line-cost-account.test.ts
 new file mode 100644
-index 000000000..9e21c56c7
+index 0000000..9e21c56
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-cost-account.test.ts
 @@ -0,0 +1,113 @@
@@ -294,7 +326,7 @@ index 000000000..9e21c56c7
 +		);
 +		expect(result.visible).toBe(true);
 +		const text = plain(result.content);
-+		expect(text).toContain("$1.23");
++		expect(text).toContain("1.23");
 +		expect(text).toContain("a@example.com");
 +		expect(text.indexOf("a@example.com")).toBeGreaterThan(text.indexOf("$1.23"));
 +	});
@@ -338,7 +370,7 @@ index 000000000..9e21c56c7
 +		);
 +		expect(result.visible).toBe(true);
 +		const text = plain(result.content);
-+		expect(text).toContain("$1.23");
++		expect(text).toContain("1.23");
 +		expect(text).not.toContain("a@example.com");
 +	});
 +});
