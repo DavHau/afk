@@ -10,7 +10,10 @@
 # operations in-process behind @oh-my-pi/pi-natives/vcs — gitoxide/jj-lib —
 # deleting the TS utils/git.ts/utils/jj.ts façades; the whole jj patch family
 # was re-cut against the native layer, raw refs/omp/* plumbing now shells to
-# `git update-ref` since the natives hardcode refs/heads/) in patches/omp/.
+# `git update-ref` since the natives hardcode refs/heads/), then 18.1.4
+# (event-controller's toolCall loop resolves toolRenderName(content.name)
+# right after the id re-key; the streamed-tool-name-rebind displacement hunk
+# re-anchored above that resolution) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
