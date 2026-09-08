@@ -9,7 +9,7 @@ What must survive a rebase:
   keyword (clamped at its own call site), still reach the model's max.
 
 diff --git a/packages/coding-agent/src/auto-thinking/classifier.ts b/packages/coding-agent/src/auto-thinking/classifier.ts
-index b7ccaa0..d823526 100644
+index 9d4a4c7..cf7dc0c 100644
 --- a/packages/coding-agent/src/auto-thinking/classifier.ts
 +++ b/packages/coding-agent/src/auto-thinking/classifier.ts
 @@ -46,14 +46,17 @@ import { tinyModelClient } from "../tiny/title-client";

@@ -42,11 +42,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1788306937,
-        "narHash": "sha256-lbrI1UYVpFgKSsyrU9oeF7FHfnu8nLD9ja0ou9f2rxk=",
+        "lastModified": 1788450739,
+        "narHash": "sha256-glZLQlzIn1fXH6PazR2iUmTo7kzzyYSshrWhLS9TqCU=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "f16b25b8c3d2809b87925d0b76652d7821a75c68",
+        "rev": "31729ca8cbdb4fa927b34e5f4353e6a83f39e993",
         "type": "github"
       },
       "original": {
@@ -66,10 +66,10 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1788392098,
-        "narHash": "sha256-7Ouya75MfV8m8WPokr2X45Zj/fWX7JGMvEzQNnwgR2k=",
+        "lastModified": 1788839367,
+        "narHash": "sha256-O5gDvHWgLwkrGPPpqWS5o7wVQxQBWZOYR6t7kt6sX1U=",
         "ref": "refs/heads/main",
-        "rev": "ceb3bcb057ab9066541fb1334934d75270164e2b",
+        "rev": "3e98bf69b4daad2bee9cc9da412ad258b56e1a98",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/numtide/llm-agents.nix"

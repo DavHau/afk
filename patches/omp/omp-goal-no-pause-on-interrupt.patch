@@ -20,7 +20,7 @@ What must survive a rebase:
   a user who is typing.
 
 diff --git a/packages/coding-agent/src/goals/runtime.ts b/packages/coding-agent/src/goals/runtime.ts
-index ae65b9abf..e30db57e1 100644
+index ae65b9a..e30db57 100644
 --- a/packages/coding-agent/src/goals/runtime.ts
 +++ b/packages/coding-agent/src/goals/runtime.ts
 @@ -233,25 +233,20 @@ export class GoalRuntime {
@@ -58,7 +58,7 @@ index ae65b9abf..e30db57e1 100644
  	}
  
 diff --git a/packages/coding-agent/test/goals/goal-runtime.test.ts b/packages/coding-agent/test/goals/goal-runtime.test.ts
-index d4dd510a3..a20b284cf 100644
+index d4dd510..a20b284 100644
 --- a/packages/coding-agent/test/goals/goal-runtime.test.ts
 +++ b/packages/coding-agent/test/goals/goal-runtime.test.ts
 @@ -250,7 +250,7 @@ describe("goal runtime", () => {

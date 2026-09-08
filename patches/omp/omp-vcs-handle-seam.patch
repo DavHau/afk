@@ -21,7 +21,7 @@ What must survive a rebase:
   carry the vcs field in their mocked contexts.
 
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index bf82834..54798b4 100644
+index 2699d6e..2598b29 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
 @@ -20,7 +20,6 @@
@@ -271,10 +271,10 @@ index bf82834..54798b4 100644
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch {
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index e5189d0..262a4b1 100644
+index f5ae969..8ed806e 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -622,7 +622,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -643,7 +643,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		) {
  			const outcome = await mergeIsolatedChanges({
  				result,
@@ -283,7 +283,7 @@ index e5189d0..262a4b1 100644
  				mergeMode: policy.mergeMode,
  			});
  			mergeSummary = outcome.summary;
-@@ -630,7 +630,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -651,7 +651,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  			if (outcome.changesApplied !== false) {
  				const nestedPatchSummary = await applyEligibleNestedPatches({
  					result,
@@ -473,10 +473,10 @@ index 0000000..a78cbc9
 +	return new GitCheckoutHandle(root);
 +}
 diff --git a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
-index 22dfa13..c0cd697 100644
+index 4650c02..b8d369d 100644
 --- a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 +++ b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
-@@ -20,6 +20,7 @@ import * as taskExecutor from "../../src/task/executor";
+@@ -22,6 +22,7 @@ import * as taskExecutor from "../../src/task/executor";
  import * as isolationRunner from "../../src/task/isolation-runner";
  import { AgentOutputManager } from "../../src/task/output-manager";
  import type { AgentDefinition, AgentProgress, SingleResult, StructuredSubagentOutput } from "../../src/task/types";
@@ -484,7 +484,7 @@ index 22dfa13..c0cd697 100644
  import type { ToolSession } from "../../src/tools";
  
  const taskAgent = {
-@@ -1114,6 +1115,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1057,6 +1058,7 @@ describe("runEvalAgent isolation", () => {
  	function mockIsolationContext(): { repoRoot: string } {
  		const repoRoot = "/repo-root";
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
@@ -492,7 +492,7 @@ index 22dfa13..c0cd697 100644
  			repoRoot,
  			baseline: {
  				root: { repoRoot, headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" },
-@@ -1255,6 +1257,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1198,6 +1200,7 @@ describe("runEvalAgent isolation", () => {
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
  			ops.push("prepare");
  			return {
@@ -501,10 +501,10 @@ index 22dfa13..c0cd697 100644
  				baseline: {
  					root: {
 diff --git a/packages/coding-agent/test/eval/agent-bridge.test.ts b/packages/coding-agent/test/eval/agent-bridge.test.ts
-index 19c17bf..8e0f47b 100644
+index c2a2e2d..8efe03f 100644
 --- a/packages/coding-agent/test/eval/agent-bridge.test.ts
 +++ b/packages/coding-agent/test/eval/agent-bridge.test.ts
-@@ -8,6 +8,7 @@ import * as taskDiscovery from "@oh-my-pi/pi-coding-agent/task/discovery";
+@@ -14,6 +14,7 @@ import * as taskDiscovery from "@oh-my-pi/pi-coding-agent/task/discovery";
  import * as taskExecutor from "@oh-my-pi/pi-coding-agent/task/executor";
  import * as isolationRunner from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
  import { runStructuredSubagent } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
@@ -512,8 +512,8 @@ index 19c17bf..8e0f47b 100644
  import type { AgentDefinition, SingleResult, StructuredSubagentOutput } from "@oh-my-pi/pi-coding-agent/task/types";
  import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
  
-@@ -179,6 +180,7 @@ describe("runEvalAgent", () => {
- 		session.settings.set("task.isolation.mode", "auto");
+@@ -220,6 +221,7 @@ describe("runEvalAgent", () => {
+ 		session.settings.set("task.isolation.enabled", true);
  		vi.spyOn(taskDiscovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
 +			vcs: new GitCheckoutHandle("/tmp"),
@@ -542,7 +542,7 @@ index 636c707..436d6cd 100644
  
  function handle(): IsolationHandle {
 diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
-index 66ed0c7..79b2e7c 100644
+index a879543..7f0d78b 100644
 --- a/packages/coding-agent/test/task/isolation-runner.test.ts
 +++ b/packages/coding-agent/test/task/isolation-runner.test.ts
 @@ -11,6 +11,7 @@ import {

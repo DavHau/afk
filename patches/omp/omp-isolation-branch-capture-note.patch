@@ -25,10 +25,10 @@ What must survive a rebase:
   original quiet wording.
 
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index e5189d0..63d2d99 100644
+index a3b6197..4af8fa8 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -643,10 +643,19 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -665,10 +665,19 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
  			if (result.branchName)
  				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;

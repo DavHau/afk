@@ -1,15 +1,16 @@
 diff --git a/packages/coding-agent/src/prompts/tools/yield.md b/packages/coding-agent/src/prompts/tools/yield.md
-index 3eed160..3edcbbd 100644
+index 2f5df15..ec8425b 100644
 --- a/packages/coding-agent/src/prompts/tools/yield.md
 +++ b/packages/coding-agent/src/prompts/tools/yield.md
-@@ -1,6 +1,6 @@
- Submit subagent output. Always wrap the payload: `result: { data: <your output> }` for success, `result: { error: "message" }` for failure. `data`/`error` at the top level or a bare payload is invalid.
+@@ -1,7 +1,7 @@
+ {{#if workPoolItems}}Submit ONE workpool item at a time as `{ key, data }` or `{ key, error }`: `key` is its 1-based number; `data` is the self-contained outcome/evidence value, `error` is a failure reason. The result tells you which keys remain. The final key ends the turn automatically. NEVER submit multiple items together.
+ {{else}}Submit subagent output: `{ data: <your output> }` for success, `{ error: "message" }` for failure. Never both; never a bare payload outside `data`.
  
 -Omit `type` for the usual single terminal structured result. Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates.
 +Omit `type` for the usual single terminal structured result. Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates. For an array-valued section, `data` is one element or an array of elements (an array payload is always read as the whole section's elements).
+ {{/if}}
+ {{#unless workPoolItems}}
  {{#if hasOutputSchema}}
- This task declares an output schema: the terminal `result.data` MUST be the full object matching it. A data-less `type: "result"` finalizes previously submitted incremental sections; it is invalid when no sections were submitted — prose in your last turn can never satisfy the schema.
- {{else}}
 diff --git a/packages/coding-agent/src/task/yield-assembly.ts b/packages/coding-agent/src/task/yield-assembly.ts
 index cfd7a26..be2b42d 100644
 --- a/packages/coding-agent/src/task/yield-assembly.ts
@@ -103,19 +104,10 @@ index a89b50c..6a78059 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index 6e33a32..0a0863b 100644
+index d231d7d..2e5fdc1 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
-@@ -7,7 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
- import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
- import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
- import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
--import { arrayValuedLabels } from "../../src/task/yield-assembly";
-+import { arrayValuedLabels, assembleYieldResult } from "../../src/task/yield-assembly";
- 
- function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
- 	return {
-@@ -355,6 +355,55 @@ describe("YieldTool", () => {
+@@ -422,6 +422,55 @@ describe("YieldTool", () => {
  		).rejects.toThrow(/Section "findings" does not match schema.*body/);
  	});
  
@@ -142,7 +134,7 @@ index 6e33a32..0a0863b 100644
 +		const second = { title: "nit", body: "style" };
 +		const accepted = await tool.execute("call-findings-array", {
 +			type: ["findings"],
-+			result: { data: [first, second] },
++			data: [first, second],
 +		} as never);
 +		expect(accepted.details?.data).toEqual([first, second]);
 +		expect(accepted.details?.schemaOverridden).toBeUndefined();
@@ -151,7 +143,7 @@ index 6e33a32..0a0863b 100644
 +		await expect(
 +			tool.execute("call-findings-array-bad", {
 +				type: ["findings"],
-+				result: { data: [first, { title: "only-title" }] },
++				data: [first, { title: "only-title" }],
 +			} as never),
 +		).rejects.toThrow(/Section "findings" does not match schema.*body/);
 +

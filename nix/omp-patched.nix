@@ -13,7 +13,12 @@
 # `git update-ref` since the natives hardcode refs/heads/), then 18.1.4
 # (event-controller's toolCall loop resolves toolRenderName(content.name)
 # right after the id re-key; the streamed-tool-name-rebind displacement hunk
-# re-anchored above that resolution) in patches/omp/.
+# re-anchored above that resolution), then 18.1.13 (upstream split
+# task.isolation.mode into task.isolation.enabled + isolation.backend —
+# afk.nix and the required-flag tests migrated; VcsGitRepo.worktreeAdd takes
+# an options object; the yield tool's wire shape flattened `result.data` to
+# `data`; pi-iso grew clone_tree()/skip-list reflinks next to the
+# require_cow degradation seam) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where

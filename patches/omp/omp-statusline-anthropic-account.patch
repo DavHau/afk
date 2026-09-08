@@ -31,10 +31,10 @@ new billingParts assembly. The warm-up call followed the render context
 builder into #buildSegmentContext.
 
 diff --git a/packages/coding-agent/src/modes/components/status-line/component.ts b/packages/coding-agent/src/modes/components/status-line/component.ts
-index 29806ae..8bfc734 100644
+index 500b5da..0fb90b7 100644
 --- a/packages/coding-agent/src/modes/components/status-line/component.ts
 +++ b/packages/coding-agent/src/modes/components/status-line/component.ts
-@@ -480,6 +480,13 @@ export class StatusLineComponent implements Component {
+@@ -486,6 +486,13 @@ export class StatusLineComponent implements Component {
  	#usageFetchedAt = 0;
  	#usageInFlight = false;
  	#usageStartTimer: Timer | null = null;
@@ -48,7 +48,7 @@ index 29806ae..8bfc734 100644
  	// A timed-out request may still resolve. Its result remains eligible only
  	// until a newer request has applied.
  	#usageRefreshSequence = 0;
-@@ -1343,6 +1350,34 @@ export class StatusLineComponent implements Component {
+@@ -1380,6 +1387,34 @@ export class StatusLineComponent implements Component {
  		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
  	}
  
@@ -83,7 +83,7 @@ index 29806ae..8bfc734 100644
  	/**
  	 * Startup redraws only arm a short-delayed task; timeout releases the render
  	 * cadence while a late successful fetch can still refresh the cached segment.
-@@ -1758,6 +1793,7 @@ export class StatusLineComponent implements Component {
+@@ -1795,6 +1830,7 @@ export class StatusLineComponent implements Component {
  
  		// Trigger background fetch (5-min TTL); render uses cached value
  		this.refreshUsageInBackground();
@@ -92,10 +92,10 @@ index 29806ae..8bfc734 100644
  		// Get usage statistics
  		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
 diff --git a/packages/coding-agent/src/modes/components/status-line/segments.ts b/packages/coding-agent/src/modes/components/status-line/segments.ts
-index d09e8a4..6a6f268 100644
+index 8c04ce2..985ee51 100644
 --- a/packages/coding-agent/src/modes/components/status-line/segments.ts
 +++ b/packages/coding-agent/src/modes/components/status-line/segments.ts
-@@ -532,7 +532,26 @@ const costSegment: StatusLineSegment = {
+@@ -593,7 +593,26 @@ const costSegment: StatusLineSegment = {
  		}
  		if (billingParts.length === 0) return { content: "", visible: false };
  
@@ -257,7 +257,7 @@ index 0000000..e4f9db9
 +});
 diff --git a/packages/coding-agent/test/status-line-cost-account.test.ts b/packages/coding-agent/test/status-line-cost-account.test.ts
 new file mode 100644
-index 0000000..9e21c56
+index 0000000..e4c0890
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-cost-account.test.ts
 @@ -0,0 +1,113 @@

@@ -28,16 +28,16 @@ What must survive a rebase:
   refs/heads/.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 9103cd8..f8a4dbc 100644
+index d531a2e..a0394c0 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -112,7 +112,7 @@ Artifacts and side channels:
    - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `outputSchema`, and `schemaMode` per item. `effort` appears only when its setting enables it; `isolated` also requires plan mode to be disabled. Lifecycle, revival, and concurrency semantics match N parallel single calls.
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
- - Isolation mode (`task.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
+ - Isolation is enabled with `task.isolation.enabled`; `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
 -- Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `omp/task/<id>`, cherry-pick into parent).
 +- Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command).
- - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `designer`, `reviewer`, `security-reviewer`, `librarian`, `task`, `sonic`).
+ - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `reviewer`, `security-reviewer`, `task`, `sonic`).
  - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
  - Advisor: agent frontmatter `advisor` or `task.agentAdvisor[agentName]` (`"on"` / `"off"` / model pattern) pairs the child session with an advisor; an explicit pattern lands on the child's `modelRoles.advisor`. Subagents default to no advisor.
 @@ -120,7 +120,7 @@ Artifacts and side channels:
@@ -50,7 +50,7 @@ index 9103cd8..f8a4dbc 100644
    - Child sessions may use whichever networked tools/models their active tool set permits.
    - MCP proxy tools can call existing parent MCP connections with a 60_000 ms timeout.
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 71d12b0..bf82834 100644
+index d0dd7a6..2699d6e 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
 @@ -40,6 +40,7 @@ import {
@@ -101,10 +101,10 @@ index 71d12b0..bf82834 100644
  }
  
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 1961d14..ad30279 100644
+index 067fb6f..136da23 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -579,6 +579,78 @@ export interface CommitToBranchResult {
+@@ -577,6 +577,78 @@ export interface CommitToBranchResult {
  	baseSha?: string;
  }
  
@@ -183,7 +183,7 @@ index 1961d14..ad30279 100644
  function baselineHasRootWip(baseline: RepoBaseline): boolean {
  	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
  }
-@@ -743,11 +815,11 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+@@ -741,11 +813,11 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  	const baselineSha = opts.baseline.root.headCommit;
  	const repo = vcs.requireGit(opts.repoRoot);
  	const isolationRepo = vcs.requireGit(opts.isolationDir);
@@ -192,12 +192,12 @@ index 1961d14..ad30279 100644
  
  	const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  	try {
--		await repo.worktreeAdd(tmpDir, opts.branchName, false);
-+		await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, opts.branchName, opts.taskId), true);
+-		await repo.worktreeAdd(tmpDir, opts.branchName, { detach: false, clone: false });
++		await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, opts.branchName, opts.taskId), { detach: true, clone: false });
  		const agentCommits = await isolationRepo.revListRange(baselineSha, opts.isolationHead);
  		const baselineWip = [opts.baseline.root.staged, opts.baseline.root.unstaged, opts.baseline.root.untrackedPatch];
  		// Seed the parent ODB with the dirty-side blobs needed by `git apply
-@@ -803,6 +875,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+@@ -801,6 +873,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  				await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
  			}
  		}
@@ -205,7 +205,7 @@ index 1961d14..ad30279 100644
  	} finally {
  		await tryRemoveWorktree(repo, tmpDir);
  		await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -868,9 +941,9 @@ export async function commitToBranch(
+@@ -866,9 +939,9 @@ export async function commitToBranch(
  		} else {
  			// Transfer the agent's commit objects (which live in isolation's `.git`,
  			// stranded once `cleanupIsolation` tears the overlay down) into the parent
@@ -218,19 +218,19 @@ index 1961d14..ad30279 100644
  
  			// Leftover = anything still uncommitted in isolation on top of the
  			// agent's last commit (staged, unstaged, untracked). The agent didn't
-@@ -886,9 +959,10 @@ export async function commitToBranch(
+@@ -884,9 +957,10 @@ export async function commitToBranch(
  			if (leftoverPatch.trim()) {
  				const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  				try {
--					await repo.worktreeAdd(tmpDir, branchName, false);
-+					await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, branchName, taskId), true);
+-					await repo.worktreeAdd(tmpDir, branchName, { detach: false, clone: false });
++					await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, branchName, taskId), { detach: true, clone: false });
  					const msg = (commitMessage && (await commitMessage(leftoverPatch))) || fallbackMessage;
  					await commitPatchToBranchWorktree(tmpDir, taskId, leftoverPatch, msg);
 +					await advanceTaskRef(repoRoot, tmpDir, branchName, taskId);
  				} finally {
  					await tryRemoveWorktree(repo, tmpDir);
  					await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -897,15 +971,16 @@ export async function commitToBranch(
+@@ -895,15 +969,16 @@ export async function commitToBranch(
  		}
  		branchCreated = true;
  	} else if (rootPatch.trim()) {
@@ -239,8 +239,8 @@ index 1961d14..ad30279 100644
  		branchCreated = true;
  		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  		try {
--			await repo.worktreeAdd(tmpDir, branchName, false);
-+			await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, branchName, taskId), true);
+-			await repo.worktreeAdd(tmpDir, branchName, { detach: false, clone: false });
++			await repo.worktreeAdd(tmpDir, await resolveTaskRefSha(repo, branchName, taskId), { detach: true, clone: false });
  
  			const msg = (commitMessage && (await commitMessage(rootPatch))) || fallbackMessage;
  			const wip = baselineHasRootWip(baseline.root) ? baseline.root : undefined;
@@ -249,7 +249,7 @@ index 1961d14..ad30279 100644
  		} finally {
  			await tryRemoveWorktree(repo, tmpDir);
  			await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -957,7 +1032,10 @@ export async function mergeTaskBranches(
+@@ -955,7 +1030,10 @@ export async function mergeTaskBranches(
  		try {
  			for (const { branchName, baseSha } of branches) {
  				try {
@@ -261,7 +261,7 @@ index 1961d14..ad30279 100644
  					for (const revision of revisions) {
  						try {
  							await repo.cherryPick(revision);
-@@ -1019,6 +1097,9 @@ export async function mergeTaskBranches(
+@@ -1017,6 +1095,9 @@ export async function mergeTaskBranches(
  export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
  	const repo = vcs.requireGit(repoRoot);
  	for (const branch of branches) {
@@ -482,10 +482,10 @@ index 0000000..c3d6460
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 8624a4d..32e7762 100644
+index 639b308..8d5afcb 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -1367,4 +1367,82 @@ describe("commitToBranch preserves agent commits", () => {
+@@ -1363,4 +1363,82 @@ describe("commitToBranch preserves agent commits", () => {
  			expect(branchDiff).toContain("+agent-edit");
  		});
  	});

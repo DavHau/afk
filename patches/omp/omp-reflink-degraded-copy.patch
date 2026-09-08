@@ -50,10 +50,10 @@ What must survive a rebase:
   — only content equality and error class.
 
 diff --git a/crates/pi-iso/src/lib.rs b/crates/pi-iso/src/lib.rs
-index 85320b3..113b702 100644
+index 730019d..a4a67b1 100644
 --- a/crates/pi-iso/src/lib.rs
 +++ b/crates/pi-iso/src/lib.rs
-@@ -166,6 +166,18 @@ impl ProbeResult {
+@@ -173,6 +173,18 @@ impl ProbeResult {
  	}
  }
  
@@ -72,7 +72,7 @@ index 85320b3..113b702 100644
  /// Error returned by every backend operation.
  ///
  /// `Unavailable` is the only variant callers are expected to treat specially —
-@@ -243,6 +255,14 @@ pub trait IsolationBackend: Send + Sync {
+@@ -250,6 +262,14 @@ pub trait IsolationBackend: Send + Sync {
  
  	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()>;
  
@@ -84,11 +84,11 @@ index 85320b3..113b702 100644
 +		self.start(lower, merged)
 +	}
 +
- 	fn stop(&self, merged: &Path) -> IsoResult<()>;
- 
- 	/// Capture the changes between `lower` and the current state of
+ 	/// Clone `lower` into `merged` copy-on-write, omitting named top-level
+ 	/// entries.
+ 	fn clone_tree(
 diff --git a/crates/pi-iso/src/linux_reflink.rs b/crates/pi-iso/src/linux_reflink.rs
-index d0a23fe..815e611 100644
+index be4a227..10e1dd6 100644
 --- a/crates/pi-iso/src/linux_reflink.rs
 +++ b/crates/pi-iso/src/linux_reflink.rs
 @@ -3,9 +3,12 @@
@@ -136,7 +136,7 @@ index d0a23fe..815e611 100644
  			Err(IsoError::unavailable("Linux FICLONE reflink isolation is only available on Linux"))
  		}
  	}
-@@ -84,11 +91,11 @@ mod imp {
+@@ -96,11 +103,11 @@ mod imp {
  	// both.
  	const FICLONE: libc::Ioctl = 0x4004_9409;
  
@@ -145,33 +145,44 @@ index d0a23fe..815e611 100644
  		let lower = canonical_existing_dir(lower)?;
  		prepare_destination(merged)?;
  
--		let result = recursive_reflink(&lower, merged);
-+		let result = recursive_reflink(&lower, merged, require_cow);
+-		let result = recursive_reflink(&lower, merged, None);
++		let result = recursive_reflink(&lower, merged, None, require_cow);
  		if result.is_err() {
  			let _ = fs::remove_dir_all(merged);
  		}
-@@ -154,7 +161,7 @@ mod imp {
- 		Ok(())
- 	}
- 
--	fn recursive_reflink(src: &Path, dst: &Path) -> IsoResult<()> {
-+	fn recursive_reflink(src: &Path, dst: &Path, require_cow: bool) -> IsoResult<()> {
+@@ -110,7 +117,10 @@ mod imp {
+ 	pub fn clone_tree(lower: &Path, merged: &Path, skip: &[&std::ffi::OsStr]) -> IsoResult<()> {
+ 		let lower = canonical_existing_dir(lower)?;
+ 		prepare_destination(merged)?;
+-		let result = recursive_reflink(&lower, merged, Some(skip));
++		// Worktree clones keep upstream's contract: a filesystem that cannot
++		// clone extents fails here and the caller falls back to a plain
++		// checkout, never to a silent full byte copy of the tree.
++		let result = recursive_reflink(&lower, merged, Some(skip), true);
+ 		if result.is_err() {
+ 			let _ = fs::remove_dir_all(merged);
+ 		}
+@@ -180,6 +190,7 @@ mod imp {
+ 		src: &Path,
+ 		dst: &Path,
+ 		skip: Option<&[&std::ffi::OsStr]>,
++		require_cow: bool,
+ 	) -> IsoResult<()> {
  		let meta = fs::symlink_metadata(src)
  			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
- 		fs::create_dir(dst)
-@@ -173,9 +180,9 @@ mod imp {
+@@ -202,9 +213,9 @@ mod imp {
  			if file_type.is_symlink() {
  				clone_symlink(&src_path, &dst_path)?;
  			} else if file_type.is_dir() {
--				recursive_reflink(&src_path, &dst_path)?;
-+				recursive_reflink(&src_path, &dst_path, require_cow)?;
+-				recursive_reflink(&src_path, &dst_path, None)?;
++				recursive_reflink(&src_path, &dst_path, None, require_cow)?;
  			} else if file_type.is_file() {
 -				clone_file(&src_path, &dst_path)?;
 +				clone_file(&src_path, &dst_path, require_cow)?;
  			} else {
  				return Err(IsoError::other(format!(
  					"unsupported file type in reflink source: {}",
-@@ -200,7 +207,7 @@ mod imp {
+@@ -229,7 +240,7 @@ mod imp {
  		Ok(())
  	}
  
@@ -180,7 +191,7 @@ index d0a23fe..815e611 100644
  		let meta = fs::symlink_metadata(src)
  			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
  		let src_file = File::open(src)
-@@ -216,8 +223,23 @@ mod imp {
+@@ -245,8 +256,23 @@ mod imp {
  		let rc = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
  		if rc != 0 {
  			let err = std::io::Error::last_os_error();
@@ -206,7 +217,7 @@ index d0a23fe..815e611 100644
  		}
  
  		preserve_permissions(dst, &meta)?;
-@@ -225,12 +247,15 @@ mod imp {
+@@ -254,12 +280,15 @@ mod imp {
  		Ok(())
  	}
  
@@ -227,7 +238,7 @@ index d0a23fe..815e611 100644
  			return IsoError::unavailable(format!(
  				"FICLONE unsupported for {} -> {}: {err}",
  				src.display(),
-@@ -265,3 +290,134 @@ mod imp {
+@@ -294,3 +323,134 @@ mod imp {
  		}
  	}
  }
@@ -363,7 +374,7 @@ index d0a23fe..815e611 100644
 +
 +}
 diff --git a/crates/pi-natives/src/iso.rs b/crates/pi-natives/src/iso.rs
-index 051fa5c..67cfc65 100644
+index 3a962aa..130ff2e 100644
 --- a/crates/pi-natives/src/iso.rs
 +++ b/crates/pi-natives/src/iso.rs
 @@ -7,8 +7,10 @@
@@ -430,10 +441,10 @@ index 051fa5c..67cfc65 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index d635eea..cc7c80b 100644
+index b42ef7e..90f66ee 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -1668,9 +1668,20 @@ export interface IsoResolveResult {
+@@ -1950,9 +1950,20 @@ export interface IsoResolveResult {
  
  /**
   * Materialise `merged` as a writable view of `lower` using the requested

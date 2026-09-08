@@ -33,10 +33,10 @@ chatContainer mock updated); creation sites and loop structure otherwise
 match, offsets refreshed.
 
 diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
-index cfb1c5d..ec39077 100644
+index 0913d9f..9ac3590 100644
 --- a/packages/coding-agent/src/modes/controllers/event-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
-@@ -217,6 +217,13 @@ export class EventController {
+@@ -220,6 +220,13 @@ export class EventController {
  	// once instead of twice.
  	#vocalizedMessageUpdates = new WeakSet<object>();
  	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
@@ -50,7 +50,7 @@ index cfb1c5d..ec39077 100644
  
  	constructor(private ctx: InteractiveModeContext) {
  		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-@@ -1213,6 +1220,22 @@ export class EventController {
+@@ -1237,6 +1244,22 @@ export class EventController {
  					this.#migrateStreamedToolCallId(priorId, content.id);
  				}
  				this.#streamedToolCallIdByIndex.set(contentIndex, content.id);
@@ -73,7 +73,7 @@ index cfb1c5d..ec39077 100644
  				const tool = this.ctx.viewSession.getToolByName(content.name);
  				const renderToolName = toolRenderName(content.name, tool);
  				if (renderToolName === "read") {
-@@ -1233,6 +1256,7 @@ export class EventController {
+@@ -1257,6 +1280,7 @@ export class EventController {
  							group.updateArgs(content.arguments, content.id);
  							this.ctx.pendingTools.set(content.id, group);
  							this.#toolTimelineComponents.set(content.id, group);
@@ -81,7 +81,7 @@ index cfb1c5d..ec39077 100644
  						}
  						continue;
  					}
-@@ -1288,6 +1312,7 @@ export class EventController {
+@@ -1313,6 +1337,7 @@ export class EventController {
  					this.ctx.chatContainer.addChild(component);
  					this.ctx.pendingTools.set(content.id, component);
  					this.#toolTimelineComponents.set(content.id, component);
@@ -91,10 +91,10 @@ index cfb1c5d..ec39077 100644
  					// side effects already ran on first arrival.
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 new file mode 100644
-index 0000000..bf8971e
+index 0000000..b54798e
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,106 @@
 +/**
 + * Repro: openai-completions-style streaming — the provider throttle-parses
 + * `block.arguments` (every ~256 bytes) but never sets kStreamingPartialJson.
@@ -139,7 +139,12 @@ index 0000000..bf8971e
 +	const ctx = {
 +		isInitialized: true,
 +		streamingMessage,
-+		streamingComponent: { setHideThinkingBlock() {}, markTranscriptBlockFinalized() {} },
++		streamingComponent: {
++			setHideThinkingBlock() {},
++			markTranscriptBlockFinalized() {},
++			isTranscriptBlockFinalized: () => false,
++			setLinkTargets() {},
++		},
 +		noteDisplayableThinkingContent: () => false,
 +		effectiveHideThinkingBlock: false,
 +		pendingTools,
@@ -198,10 +203,10 @@ index 0000000..bf8971e
 +});
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 new file mode 100644
-index 0000000..e256864
+index 0000000..899dfe6
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,126 @@
 +/**
 + * Contract: providers may stream a tool call whose NAME is still a partial
 + * prefix when the call first surfaces, growing in later updates while the
@@ -252,7 +257,12 @@ index 0000000..e256864
 +	const ctx = {
 +		isInitialized: true,
 +		streamingMessage: undefined as AssistantMessage | undefined,
-+		streamingComponent: { setHideThinkingBlock() {}, markTranscriptBlockFinalized() {} },
++		streamingComponent: {
++			setHideThinkingBlock() {},
++			markTranscriptBlockFinalized() {},
++			isTranscriptBlockFinalized: () => false,
++			setLinkTargets() {},
++		},
 +		noteDisplayableThinkingContent: () => false,
 +		effectiveHideThinkingBlock: false,
 +		pendingTools,

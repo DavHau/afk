@@ -45,30 +45,34 @@ let
       customDirectories:
         - ${afk-skills}
         - ${../profile/skills}
+    isolation:
+      # reflink: a real frozen tree (FICLONE per-file clones). overlayfs
+      # was pinned here until 2026-08-11, but its lower layer is the
+      # parent's LIVE worktree — any file the subagent never wrote read
+      # through to the parent's current state, so every capture leaked
+      # parent and sibling writes landed mid-run (see
+      # backlog/2026-08-10-overlayfs-capture-leaks-parent-writes.md).
+      # reflink removes that contamination class by construction. On
+      # filesystems without FICLONE (ext4) the backend degrades per-file
+      # to a byte copy (omp-reflink-degraded-copy patch): same file set,
+      # same freeze, just ~6.6x clone wall and full-copy disk cost.
+      # This is still a PIN via omp-isolation-pinned-backend: no silent
+      # fallback to rcopy, which would drop gitignored files from
+      # snapshots. Hosts that prefer a hard failure over the byte-copy
+      # cost set task.isolation.requireCow: true in their own config.yml
+      # (the knob from omp-isolation-require-cow).
+      # (18.1.13 split the old task.isolation.mode into
+      # task.isolation.enabled + isolation.backend.)
+      backend: reflink
     task:
       isolation:
-        # reflink: a real frozen tree (FICLONE per-file clones). overlayfs
-        # was pinned here until 2026-08-11, but its lower layer is the
-        # parent's LIVE worktree — any file the subagent never wrote read
-        # through to the parent's current state, so every capture leaked
-        # parent and sibling writes landed mid-run (see
-        # backlog/2026-08-10-overlayfs-capture-leaks-parent-writes.md).
-        # reflink removes that contamination class by construction. On
-        # filesystems without FICLONE (ext4) the backend degrades per-file
-        # to a byte copy (omp-reflink-degraded-copy patch): same file set,
-        # same freeze, just ~6.6x clone wall and full-copy disk cost.
-        # This is still a PIN via omp-isolation-pinned-backend: no silent
-        # fallback to rcopy, which would drop gitignored files from
-        # snapshots. Hosts that prefer a hard failure over the byte-copy
-        # cost set requireCow: true in their own config.yml (the
-        # task.isolation.requireCow knob from omp-isolation-require-cow).
+        enabled: true
         # merge: branch parks each subagent's commits on
         # refs/omp/task/<id> (the jj-colocated patch).
         # apply: false (upstream task.isolation.apply since 17.1.x;
         # replaces the patched autoApply) so the top-level agent
         # cherry-picks against a clean worktree instead of the harness
         # racing concurrent edits.
-        mode: reflink
         merge: branch
         apply: false
     bash:

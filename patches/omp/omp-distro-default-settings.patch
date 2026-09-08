@@ -34,10 +34,10 @@ What must survive a rebase:
   the entire Superpowers library, down with it (tests/distro-config.test.ts).
 
 diff --git a/packages/coding-agent/src/config/settings.ts b/packages/coding-agent/src/config/settings.ts
-index 107aaab..c9d1b2a 100644
+index d2160dd..fbc2bd0 100644
 --- a/packages/coding-agent/src/config/settings.ts
 +++ b/packages/coding-agent/src/config/settings.ts
-@@ -439,6 +439,8 @@ export class Settings {
+@@ -477,6 +477,8 @@ export class Settings {
  	#storage: AgentStorage | null = null;
  
  	#configFiles: string[] = [];
@@ -46,7 +46,7 @@ index 107aaab..c9d1b2a 100644
  	/** Global settings from config.yml/config.yaml */
  	#global: RawSettings = {};
  	/** Project settings from .claude/settings.yml etc */
-@@ -749,6 +751,7 @@ export class Settings {
+@@ -803,6 +805,7 @@ export class Settings {
  		});
  		cloned.#storage = this.#storage;
  		cloned.#configPath = this.#configPath;
@@ -54,7 +54,7 @@ index 107aaab..c9d1b2a 100644
  		cloned.#global = structuredClone(this.#global);
  		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
  		if (!this.#persist) cloned.#projectShellPathSource = this.#projectShellPathSource;
-@@ -1286,6 +1289,7 @@ export class Settings {
+@@ -1375,6 +1378,7 @@ export class Settings {
  		if (globalResult.status === "rejected") throw globalResult.reason;
  		if (projectResult.status === "rejected") throw projectResult.reason;
  
@@ -62,7 +62,7 @@ index 107aaab..c9d1b2a 100644
  		this.#project = projectResult.value;
  		this.#configOverlay = await this.#loadConfigOverlays();
  
-@@ -1317,6 +1321,7 @@ export class Settings {
+@@ -1406,6 +1410,7 @@ export class Settings {
  			this.#global = globalResult.value;
  		}
  
@@ -70,7 +70,7 @@ index 107aaab..c9d1b2a 100644
  		this.#project = projectResult.value;
  		this.#configOverlay = await this.#loadConfigOverlays();
  		this.#rebuildMerged();
-@@ -1574,6 +1579,30 @@ export class Settings {
+@@ -1864,6 +1869,30 @@ export class Settings {
  		return result.settings;
  	}
  
@@ -101,7 +101,7 @@ index 107aaab..c9d1b2a 100644
  	/**
  	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
  	 * missing or malformed files are hard errors so a typo'd path cannot
-@@ -2648,7 +2677,7 @@ export class Settings {
+@@ -2956,7 +2985,7 @@ export class Settings {
  	}
  
  	#rebuildMerged(): void {
