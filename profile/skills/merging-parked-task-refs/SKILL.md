@@ -44,7 +44,10 @@ orphan instead of `@`.
   close out prior work, then a plain `jj new` (no `-m`).
 - NEVER `jj describe` / `jj new -m` immediately before a pick.
 - Describe `@` only AFTER the batch — and again after each later batch.
-- Sweep: `jj log -r 'heads(mutable()) ~ ::@ ~ bookmarks()'` MUST be empty.
+- Sweep: `jj log -r 'heads(mutable()) ~ ::@ ~ bookmarks() ~ working_copies()'`
+  MUST be empty. `~ working_copies()` is load-bearing: every OTHER jj
+  workspace's working-copy commit is a mutable head too, and `jj abandon`
+  merely recreates it (the sweep would loop forever).
   `jj abandon` a listed head only once you confirm its content is already in
   `@`'s ancestry; otherwise LEAVE IT — more likely the user's live work than
   garbage. `jj op restore` recovers mistakes.
