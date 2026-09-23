@@ -25,11 +25,17 @@ What must survive a rebase:
   isolation-preparation error message, so the old structured-subagent
   wording hunk is retired.
 
+Rebased 18.1.13 -> 18.2.10: the jj end-to-end test (capture, park, merge
+via the jj handle in branch mode) moved out of the pruned
+test/task/isolation-runner.test.ts into its own
+test/task/vcs-jj-e2e.test.ts. prepareIsolationDir is called right after
+ensureIsolation, before the subprocess starts.
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index a0394c0..eee64b6 100644
+index 31ae96f67b..469cc2aa34 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -112,6 +112,7 @@ Artifacts and side channels:
+@@ -114,6 +114,7 @@ Artifacts and side channels:
    - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `outputSchema`, and `schemaMode` per item. `effort` appears only when its setting enables it; `isolated` also requires plan mode to be disabled. Lifecycle, revival, and concurrency semantics match N parallel single calls.
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Isolation is enabled with `task.isolation.enabled`; `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
@@ -38,29 +44,29 @@ index a0394c0..eee64b6 100644
  - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `reviewer`, `security-reviewer`, `task`, `sonic`).
  - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 2598b29..33855fd 100644
+index 3239972768..b2b805defb 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -161,6 +161,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 		const taskBaseline = structuredClone(opts.context.baseline);
+@@ -393,6 +393,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
  		const isolationDir = handle.mergedDir;
+ 		const isolationBackend = handle.backend;
 +		const vcs = opts.context.vcs;
 +		await vcs.prepareIsolationDir?.(isolationDir);
  		const result = await runSubprocess({
  			...opts.baseOptions,
  			worktree: isolationDir,
-@@ -179,7 +181,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -417,7 +419,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		if (deferredCleanup && result.exitCode === 0) {
  			await deferredCleanup;
  		}
 -		const vcs = opts.context.vcs;
  		if (opts.mergeMode === "branch" && result.exitCode === 0) {
+ 			let commitResult: CommitToBranchResult | null;
  			try {
- 				const commitResult = await vcs.commitToTaskRef(
 diff --git a/packages/coding-agent/src/task/vcs-jj.ts b/packages/coding-agent/src/task/vcs-jj.ts
 new file mode 100644
-index 0000000..368c03d
+index 0000000000..85462e4171
 --- /dev/null
 +++ b/packages/coding-agent/src/task/vcs-jj.ts
 @@ -0,0 +1,399 @@
@@ -100,12 +106,12 @@ index 0000000..368c03d
 +import * as os from "node:os";
 +import * as path from "node:path";
 +import * as vcs from "@oh-my-pi/pi-natives/vcs";
++import type { NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
 +import type { TaskRefMergeSpec, VcsHandle } from "./vcs";
 +import {
 +	type CommitToBranchResult,
 +	type DeltaPatchResult,
 +	type MergeBranchResult,
-+	type NestedRepoPatch,
 +	taskBranchRef,
 +	type WorktreeBaseline,
 +} from "./worktree";
@@ -464,10 +470,10 @@ index 0000000..368c03d
 +	return new JjWorkspaceHandle(workspace.root(), gitDir);
 +}
 diff --git a/packages/coding-agent/src/task/vcs.ts b/packages/coding-agent/src/task/vcs.ts
-index a78cbc9..cf3704b 100644
+index eb0162b64d..3f0c6b9119 100644
 --- a/packages/coding-agent/src/task/vcs.ts
 +++ b/packages/coding-agent/src/task/vcs.ts
-@@ -14,10 +14,12 @@
+@@ -14,11 +14,13 @@
   * resolving their shared backing git store) can plug in without touching the
   * isolation lifecycle in `isolation-runner.ts` or its callers.
   *
@@ -478,6 +484,7 @@ index a78cbc9..cf3704b 100644
 + * covers pure jj workspaces via their backing git store.
   */
  import * as vcs from "@oh-my-pi/pi-natives/vcs";
+ import type { NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
 +import { resolveJjWorkspaceHandle } from "./vcs-jj";
  import {
  	applyNestedPatches,
@@ -526,10 +533,10 @@ index a78cbc9..cf3704b 100644
  	return new GitCheckoutHandle(root);
  }
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 136da23..152730b 100644
+index 8cd9a230a0..9a0ee7976a 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -492,13 +492,17 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
+@@ -533,13 +533,17 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
  	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
  }
  
@@ -550,22 +557,46 @@ index 136da23..152730b 100644
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
  	const resolution = natives.isoResolve(preferred ?? null);
-diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
-index 7f0d78b..c2fab8d 100644
---- a/packages/coding-agent/test/task/isolation-runner.test.ts
-+++ b/packages/coding-agent/test/task/isolation-runner.test.ts
-@@ -8,6 +8,7 @@ import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
- import {
- 	applyEligibleNestedPatches,
- 	mergeIsolatedChanges,
+diff --git a/packages/coding-agent/test/task/vcs-jj-e2e.test.ts b/packages/coding-agent/test/task/vcs-jj-e2e.test.ts
+new file mode 100644
+index 0000000000..a13f8ed380
+--- /dev/null
++++ b/packages/coding-agent/test/task/vcs-jj-e2e.test.ts
+@@ -0,0 +1,127 @@
++import { afterEach, describe, expect, it, vi } from "bun:test";
++import * as fs from "node:fs/promises";
++import * as os from "node:os";
++import * as path from "node:path";
++import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
++import {
++	mergeIsolatedChanges,
 +	prepareIsolationContext,
- 	runIsolatedSubprocess,
- } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
- import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-@@ -660,3 +661,96 @@ describe("applyEligibleNestedPatches", () => {
- 		expect(suffix).toContain("<system-notification>");
- 	});
- });
++	runIsolatedSubprocess,
++} from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
++import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
++import * as natives from "@oh-my-pi/pi-natives";
++import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
++
++function result(overrides: Partial<SingleResult> = {}): SingleResult {
++	return {
++		index: 0,
++		id: "JjE2E",
++		agent: "task",
++		agentSource: "bundled",
++		task: "Do work",
++		assignment: "Do work",
++		exitCode: 0,
++		output: "done",
++		stderr: "",
++		truncated: false,
++		durationMs: 1,
++		tokens: 0,
++		requests: 0,
++		...overrides,
++	};
++}
++
++const tempRoots: string[] = [];
 +
 +const jjAvailable = await Bun.spawn(["jj", "--version"], { stdout: "ignore", stderr: "ignore" })
 +	.exited.then(code => code === 0)
@@ -660,7 +691,7 @@ index 7f0d78b..c2fab8d 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/vcs.test.ts b/packages/coding-agent/test/task/vcs.test.ts
-index 0760f0e..bfdbf9e 100644
+index 0760f0e404..bfdbf9e84b 100644
 --- a/packages/coding-agent/test/task/vcs.test.ts
 +++ b/packages/coding-agent/test/task/vcs.test.ts
 @@ -73,7 +73,7 @@ describe("resolveVcsHandle", () => {
@@ -875,10 +906,10 @@ index 0760f0e..bfdbf9e 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 8d5afcb..19b9dfa 100644
+index 0910ff1d26..4ad93d7aac 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -186,6 +186,27 @@ describe("worktree isolation helpers", () => {
+@@ -246,6 +246,27 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fallbackReason).toBe(unavailable.message);
  		});
  

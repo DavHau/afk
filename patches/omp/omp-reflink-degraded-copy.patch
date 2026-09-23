@@ -50,7 +50,7 @@ What must survive a rebase:
   — only content equality and error class.
 
 diff --git a/crates/pi-iso/src/lib.rs b/crates/pi-iso/src/lib.rs
-index 730019d..a4a67b1 100644
+index 730019ddfb..a4a67b1422 100644
 --- a/crates/pi-iso/src/lib.rs
 +++ b/crates/pi-iso/src/lib.rs
 @@ -173,6 +173,18 @@ impl ProbeResult {
@@ -88,7 +88,7 @@ index 730019d..a4a67b1 100644
  	/// entries.
  	fn clone_tree(
 diff --git a/crates/pi-iso/src/linux_reflink.rs b/crates/pi-iso/src/linux_reflink.rs
-index be4a227..10e1dd6 100644
+index be4a2274df..10e1dd6cbe 100644
 --- a/crates/pi-iso/src/linux_reflink.rs
 +++ b/crates/pi-iso/src/linux_reflink.rs
 @@ -3,9 +3,12 @@
@@ -374,7 +374,7 @@ index be4a227..10e1dd6 100644
 +
 +}
 diff --git a/crates/pi-natives/src/iso.rs b/crates/pi-natives/src/iso.rs
-index 3a962aa..130ff2e 100644
+index 3a962aa9ac..130ff2e1cc 100644
 --- a/crates/pi-natives/src/iso.rs
 +++ b/crates/pi-natives/src/iso.rs
 @@ -7,8 +7,10 @@
@@ -441,10 +441,10 @@ index 3a962aa..130ff2e 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index b42ef7e..90f66ee 100644
+index 2693f62ff4..e6160ca193 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -1950,9 +1950,20 @@ export interface IsoResolveResult {
+@@ -1953,9 +1953,20 @@ export interface IsoResolveResult {
  
  /**
   * Materialise `merged` as a writable view of `lower` using the requested

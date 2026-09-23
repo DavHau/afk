@@ -15,7 +15,7 @@ What must survive a rebase:
   four prompts; the same four spots were re-worded in place.)
 
 diff --git a/packages/coding-agent/src/prompts/system/commit-message-system.md b/packages/coding-agent/src/prompts/system/commit-message-system.md
-index be96ec2..77263c9 100644
+index be96ec2054..77263c95bf 100644
 --- a/packages/coding-agent/src/prompts/system/commit-message-system.md
 +++ b/packages/coding-agent/src/prompts/system/commit-message-system.md
 @@ -1,4 +1,4 @@
@@ -25,7 +25,7 @@ index be96ec2..77263c9 100644
  Format: `type(scope): description`
  Type: feat|fix|refactor|chore|test|docs. Scope optional.
 diff --git a/packages/coding-agent/src/prompts/system/orchestrate-notice.md b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
-index 42cb1e0..f7458b8 100644
+index 49f6e16e01..e16091a0dc 100644
 --- a/packages/coding-agent/src/prompts/system/orchestrate-notice.md
 +++ b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
 @@ -19,7 +19,7 @@ Decompose, dispatch, verify, iterate. Substantial or parallelizable work: `task`
@@ -38,7 +38,7 @@ index 42cb1e0..f7458b8 100644
  3. Dispatch: launch all parallel `task` subagents in one message; collect every result (async results / `hub` wait) before advancing.
  4. Verify: run gates; on failure dispatch fix-ups and re-verify. Never advance on red.
 diff --git a/packages/coding-agent/src/prompts/system/plan-mode-active.md b/packages/coding-agent/src/prompts/system/plan-mode-active.md
-index 88d1899..159ef0d 100644
+index 88d1899670..159ef0d22a 100644
 --- a/packages/coding-agent/src/prompts/system/plan-mode-active.md
 +++ b/packages/coding-agent/src/prompts/system/plan-mode-active.md
 @@ -1,6 +1,6 @@
@@ -50,10 +50,10 @@ index 88d1899..159ef0d 100644
  - Canonical plan: MUST write `local://<slug>-plan.md`.
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index 5b5f0a0..7665834 100644
+index affc889aac..24374c6dbd 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -202,7 +202,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
+@@ -204,7 +204,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
  - Fix source; NEVER suppress symptom/special-case input unless asked.
  - Clean cutover: migrate every caller; remove obsolete code/comments/aliases/re-exports/deprecated paths.
  - Prefer existing-file updates over new files. Review as user.
@@ -62,7 +62,7 @@ index 5b5f0a0..7665834 100644
  
  # 5. Verify
  - NEVER yield non-trivial work without deliverable proof:
-@@ -267,5 +267,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
+@@ -269,5 +269,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
  <critical>
  - NEVER yield while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn.
  - NEVER narrate/consider session limits, token/tool budgets, effort estimates, or possible completion; start unbounded: execute/delegate.

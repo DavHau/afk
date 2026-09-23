@@ -27,11 +27,17 @@ What must survive a rebase:
   (isolation-runner.ts, #8868) — it must probe/delete the HIDDEN ref, not
   refs/heads/.
 
+Rebased 18.1.13 -> 18.2.10: upstream pruned
+test/task/isolation-runner.test.ts wholesale (`chore: prune useless
+tests`), so the test hunks this patch carried there are gone; the
+worktree-jj-colocated test is unchanged. NestedRepoPatch now lives in
+@oh-my-pi/pi-tui/tools/task.
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index d531a2e..a0394c0 100644
+index 8b1ab84742..31ae96f67b 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -112,7 +112,7 @@ Artifacts and side channels:
+@@ -114,7 +114,7 @@ Artifacts and side channels:
    - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `outputSchema`, and `schemaMode` per item. `effort` appears only when its setting enables it; `isolated` also requires plan mode to be disabled. Lifecycle, revival, and concurrency semantics match N parallel single calls.
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Isolation is enabled with `task.isolation.enabled`; `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
@@ -40,7 +46,7 @@ index d531a2e..a0394c0 100644
  - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `reviewer`, `security-reviewer`, `task`, `sonic`).
  - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
  - Advisor: agent frontmatter `advisor` or `task.agentAdvisor[agentName]` (`"on"` / `"off"` / model pattern) pairs the child session with an advisor; an explicit pattern lands on the child's `modelRoles.advisor`. Subagents default to no advisor.
-@@ -120,7 +120,7 @@ Artifacts and side channels:
+@@ -122,7 +122,7 @@ Artifacts and side channels:
  ## Side Effects
  - Filesystem
    - Writes `<id>.jsonl` and `<id>.md` under the session artifacts dir or a temp task dir; isolated patch mode writes `<id>.patch`.
@@ -50,18 +56,18 @@ index d531a2e..a0394c0 100644
    - Child sessions may use whichever networked tools/models their active tool set permits.
    - MCP proxy tools can call existing parent MCP connections with a 60_000 ms timeout.
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index d0dd7a6..2699d6e 100644
+index 9abb167c22..d8618263e9 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -40,6 +40,7 @@ import {
+@@ -46,6 +46,7 @@ import {
+ 	getRepoRoot,
  	type IsolationHandle,
  	mergeTaskBranches,
- 	type NestedRepoPatch,
 +	taskBranchRef,
  	type WorktreeBaseline,
  } from "./worktree";
  
-@@ -63,30 +64,29 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
+@@ -102,30 +103,29 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
   * a branch that is absent, empty, or still pinned at the baseline, preserving
   * the original stale-branch cleanup for the cases where nothing is at stake.
   *
@@ -101,10 +107,10 @@ index d0dd7a6..2699d6e 100644
  }
  
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 067fb6f..136da23 100644
+index fd1caa1b13..8cd9a230a0 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -577,6 +577,78 @@ export interface CommitToBranchResult {
+@@ -618,6 +618,78 @@ export interface CommitToBranchResult {
  	baseSha?: string;
  }
  
@@ -183,7 +189,7 @@ index 067fb6f..136da23 100644
  function baselineHasRootWip(baseline: RepoBaseline): boolean {
  	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
  }
-@@ -741,11 +813,11 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+@@ -782,11 +854,11 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  	const baselineSha = opts.baseline.root.headCommit;
  	const repo = vcs.requireGit(opts.repoRoot);
  	const isolationRepo = vcs.requireGit(opts.isolationDir);
@@ -197,7 +203,7 @@ index 067fb6f..136da23 100644
  		const agentCommits = await isolationRepo.revListRange(baselineSha, opts.isolationHead);
  		const baselineWip = [opts.baseline.root.staged, opts.baseline.root.unstaged, opts.baseline.root.untrackedPatch];
  		// Seed the parent ODB with the dirty-side blobs needed by `git apply
-@@ -801,6 +873,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+@@ -842,6 +914,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  				await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
  			}
  		}
@@ -205,7 +211,7 @@ index 067fb6f..136da23 100644
  	} finally {
  		await tryRemoveWorktree(repo, tmpDir);
  		await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -866,9 +939,9 @@ export async function commitToBranch(
+@@ -907,9 +980,9 @@ export async function commitToBranch(
  		} else {
  			// Transfer the agent's commit objects (which live in isolation's `.git`,
  			// stranded once `cleanupIsolation` tears the overlay down) into the parent
@@ -218,7 +224,7 @@ index 067fb6f..136da23 100644
  
  			// Leftover = anything still uncommitted in isolation on top of the
  			// agent's last commit (staged, unstaged, untracked). The agent didn't
-@@ -884,9 +957,10 @@ export async function commitToBranch(
+@@ -925,9 +998,10 @@ export async function commitToBranch(
  			if (leftoverPatch.trim()) {
  				const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
  				try {
@@ -230,7 +236,7 @@ index 067fb6f..136da23 100644
  				} finally {
  					await tryRemoveWorktree(repo, tmpDir);
  					await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -895,15 +969,16 @@ export async function commitToBranch(
+@@ -936,15 +1010,16 @@ export async function commitToBranch(
  		}
  		branchCreated = true;
  	} else if (rootPatch.trim()) {
@@ -249,7 +255,7 @@ index 067fb6f..136da23 100644
  		} finally {
  			await tryRemoveWorktree(repo, tmpDir);
  			await fs.rm(tmpDir, { recursive: true, force: true });
-@@ -955,7 +1030,10 @@ export async function mergeTaskBranches(
+@@ -996,7 +1071,10 @@ export async function mergeTaskBranches(
  		try {
  			for (const { branchName, baseSha } of branches) {
  				try {
@@ -261,7 +267,7 @@ index 067fb6f..136da23 100644
  					for (const revision of revisions) {
  						try {
  							await repo.cherryPick(revision);
-@@ -1017,6 +1095,9 @@ export async function mergeTaskBranches(
+@@ -1058,6 +1136,9 @@ export async function mergeTaskBranches(
  export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
  	const repo = vcs.requireGit(repoRoot);
  	for (const branch of branches) {
@@ -271,24 +277,9 @@ index 067fb6f..136da23 100644
  		try {
  			await repo.deleteBranch(branch, true);
  		} catch {
-diff --git a/packages/coding-agent/test/task/isolation-runner.test.ts b/packages/coding-agent/test/task/isolation-runner.test.ts
-index 66ed0c7..a879543 100644
---- a/packages/coding-agent/test/task/isolation-runner.test.ts
-+++ b/packages/coding-agent/test/task/isolation-runner.test.ts
-@@ -235,8 +235,8 @@ describe("runIsolatedSubprocess", () => {
- 			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
- 		});
- 
--		expect(rangeSpy).toHaveBeenCalledWith("base", "omp/task/RescueBranchCommits");
--		expect(refSpy).toHaveBeenCalledWith("refs/heads/omp/task/RescueBranchCommits");
-+		expect(rangeSpy).toHaveBeenCalledWith("base", "refs/omp/task/RescueBranchCommits");
-+		expect(refSpy).toHaveBeenCalledWith("refs/omp/task/RescueBranchCommits");
- 		expect(deleteSpy).not.toHaveBeenCalled();
- 		expect(outcome.error).toContain("git apply --3way failed");
- 		expect(outcome.error).toContain("preserved on branch omp/task/RescueBranchCommits");
 diff --git a/packages/coding-agent/test/task/worktree-jj-colocated.test.ts b/packages/coding-agent/test/task/worktree-jj-colocated.test.ts
 new file mode 100644
-index 0000000..c3d6460
+index 0000000000..c3d6460141
 --- /dev/null
 +++ b/packages/coding-agent/test/task/worktree-jj-colocated.test.ts
 @@ -0,0 +1,189 @@
@@ -482,10 +473,10 @@ index 0000000..c3d6460
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 639b308..8d5afcb 100644
+index 90a5648fee..0910ff1d26 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -1363,4 +1363,82 @@ describe("commitToBranch preserves agent commits", () => {
+@@ -1428,4 +1428,82 @@ describe("commitToBranch preserves agent commits", () => {
  			expect(branchDiff).toContain("+agent-edit");
  		});
  	});

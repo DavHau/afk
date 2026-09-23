@@ -18,7 +18,14 @@
 # afk.nix and the required-flag tests migrated; VcsGitRepo.worktreeAdd takes
 # an options object; the yield tool's wire shape flattened `result.data` to
 # `data`; pi-iso grew clone_tree()/skip-list reflinks next to the
-# require_cow degradation seam) in patches/omp/.
+# require_cow degradation seam), then 18.2.10 (upstream migrated the UI
+# renderers — status line, tool-execution, theme — into @oh-my-pi/pi-tui
+# behind host seams, pruned test/task/isolation-runner.test.ts, rewrote
+# the auto-thinking classifier around resolveJudge, and moved yield
+# section assembly into pi-tui; the status-line patch was re-cut across
+# StatusLineHost, the jj e2e test moved to test/task/vcs-jj-e2e.test.ts,
+# and omp-isolation-branch-capture-note was dropped as absorbed) in
+# patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -85,11 +92,13 @@
 #   default false) plumbed settings -> structured-subagent ->
 #   isolation-runner -> ensureIsolation -> isoStart options; true
 #   restores the hard spawn failure when reflink cannot clone extents.
-# - omp-isolation-branch-capture-note: under apply=false, a configured
-#   branch capture that fell back to a .patch artifact is announced as a
-#   FAILED branch capture (with result.error) instead of rendering
-#   exactly like a configured patch-mode capture — the silence that let
-#   97 downgraded captures accumulate unnoticed (2026-08-10 incident).
+# - (dropped 18.2.10) omp-isolation-branch-capture-note: upstream's
+#   structured-subagent now renders a `capture-error` isolation summary
+#   (<system-notification> with result.error, patch path and any rescued
+#   branch) for every exitCode-0 run whose changes could not be captured —
+#   ahead of the apply=false branch — which is exactly the loud
+#   branch->patch downgrade note this patch added after the 2026-08-10
+#   incident.
 # - omp-goal-no-pause-on-interrupt: a user interrupt no longer pauses an
 #   active goal. With interruptMode=wait a typed message queues as a steer,
 #   but the empty-Enter queue flush (and Esc) abort the turn with
@@ -156,7 +165,6 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-auto-thinking-ceiling.patch
     ../patches/omp/omp-isolation-pinned-backend.patch
     ../patches/omp/omp-isolation-require-cow.patch
-    ../patches/omp/omp-isolation-branch-capture-note.patch
     ../patches/omp/omp-goal-no-pause-on-interrupt.patch
     ../patches/omp/omp-anthropic-weekly-reset-priority.patch
     ../patches/omp/omp-statusline-anthropic-account.patch
