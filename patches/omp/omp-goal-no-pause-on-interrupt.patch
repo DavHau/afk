@@ -20,10 +20,10 @@ What must survive a rebase:
   a user who is typing.
 
 diff --git a/packages/coding-agent/src/goals/runtime.ts b/packages/coding-agent/src/goals/runtime.ts
-index ae65b9a..e30db57 100644
+index c4e7d5e..774659e 100644
 --- a/packages/coding-agent/src/goals/runtime.ts
 +++ b/packages/coding-agent/src/goals/runtime.ts
-@@ -233,25 +233,20 @@ export class GoalRuntime {
+@@ -234,25 +234,20 @@ export class GoalRuntime {
  	}
  
  	async onTaskAborted(options?: { reason?: "interrupted" | "internal" }): Promise<void> {
@@ -58,10 +58,10 @@ index ae65b9a..e30db57 100644
  	}
  
 diff --git a/packages/coding-agent/test/goals/goal-runtime.test.ts b/packages/coding-agent/test/goals/goal-runtime.test.ts
-index d4dd510..a20b284 100644
+index 4dfa417..559910c 100644
 --- a/packages/coding-agent/test/goals/goal-runtime.test.ts
 +++ b/packages/coding-agent/test/goals/goal-runtime.test.ts
-@@ -250,7 +250,7 @@ describe("goal runtime", () => {
+@@ -251,7 +251,7 @@ describe("goal runtime", () => {
  		expect(harness.hiddenMessages).toHaveLength(2);
  	});
  
@@ -70,7 +70,7 @@ index d4dd510..a20b284 100644
  		const harness = createHarness({
  			state: { enabled: true, mode: "active", goal: createGoal() },
  		});
-@@ -261,11 +261,11 @@ describe("goal runtime", () => {
+@@ -262,11 +262,11 @@ describe("goal runtime", () => {
  		await harness.runtime.onTaskAborted({ reason: "interrupted" });
  
  		const state = harness.getState();

@@ -33,10 +33,10 @@ chatContainer mock updated); creation sites and loop structure otherwise
 match, offsets refreshed.
 
 diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
-index 0913d9f..9ac3590 100644
+index 9d00f03..3ce6ad1 100644
 --- a/packages/coding-agent/src/modes/controllers/event-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
-@@ -220,6 +220,13 @@ export class EventController {
+@@ -219,6 +219,13 @@ export class EventController {
  	// once instead of twice.
  	#vocalizedMessageUpdates = new WeakSet<object>();
  	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
@@ -50,7 +50,7 @@ index 0913d9f..9ac3590 100644
  
  	constructor(private ctx: InteractiveModeContext) {
  		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-@@ -1237,6 +1244,22 @@ export class EventController {
+@@ -1298,6 +1305,22 @@ export class EventController {
  					this.#migrateStreamedToolCallId(priorId, content.id);
  				}
  				this.#streamedToolCallIdByIndex.set(contentIndex, content.id);
@@ -73,15 +73,15 @@ index 0913d9f..9ac3590 100644
  				const tool = this.ctx.viewSession.getToolByName(content.name);
  				const renderToolName = toolRenderName(content.name, tool);
  				if (renderToolName === "read") {
-@@ -1257,6 +1280,7 @@ export class EventController {
- 							group.updateArgs(content.arguments, content.id);
+@@ -1321,6 +1344,7 @@ export class EventController {
  							this.ctx.pendingTools.set(content.id, group);
  							this.#toolTimelineComponents.set(content.id, group);
+ 							this.#settleHeldCompletionIfPresent(content.id, group);
 +							this.#pendingToolComponentNames.set(group, content.name);
  						}
  						continue;
  					}
-@@ -1313,6 +1337,7 @@ export class EventController {
+@@ -1377,6 +1401,7 @@ export class EventController {
  					this.ctx.chatContainer.addChild(component);
  					this.ctx.pendingTools.set(content.id, component);
  					this.#toolTimelineComponents.set(content.id, component);
@@ -91,7 +91,7 @@ index 0913d9f..9ac3590 100644
  					// side effects already ran on first arrival.
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 new file mode 100644
-index 0000000..b54798e
+index 0000000..d7db7f6
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-openai-args.test.ts
 @@ -0,0 +1,106 @@
@@ -104,9 +104,9 @@ index 0000000..b54798e
 +import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 +import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 +import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
++import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 +import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
++import { initTheme } from "@oh-my-pi/pi-tui/theme";
 +import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 +import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 +
@@ -203,7 +203,7 @@ index 0000000..b54798e
 +});
 diff --git a/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 new file mode 100644
-index 0000000..899dfe6
+index 0000000..b16ca26
 --- /dev/null
 +++ b/packages/coding-agent/test/modes/controllers/event-controller-partial-name.test.ts
 @@ -0,0 +1,126 @@
@@ -221,9 +221,9 @@ index 0000000..899dfe6
 +import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 +import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 +import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
++import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 +import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
++import { initTheme } from "@oh-my-pi/pi-tui/theme";
 +import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 +import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 +

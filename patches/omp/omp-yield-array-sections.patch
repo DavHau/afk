@@ -1,3 +1,10 @@
+afk: array payloads for array-valued yield sections validate against the
+property schema and splat into the section instead of nesting.
+
+Rebased 18.1.13 -> 18.2.10: yield assembly moved to
+packages/tui/src/tools/task-yield-assembly.ts; the splat lives in its
+appendYieldSection.
+
 diff --git a/packages/coding-agent/src/prompts/tools/yield.md b/packages/coding-agent/src/prompts/tools/yield.md
 index 2f5df15..ec8425b 100644
 --- a/packages/coding-agent/src/prompts/tools/yield.md
@@ -11,30 +18,6 @@ index 2f5df15..ec8425b 100644
  {{/if}}
  {{#unless workPoolItems}}
  {{#if hasOutputSchema}}
-diff --git a/packages/coding-agent/src/task/yield-assembly.ts b/packages/coding-agent/src/task/yield-assembly.ts
-index cfd7a26..be2b42d 100644
---- a/packages/coding-agent/src/task/yield-assembly.ts
-+++ b/packages/coding-agent/src/task/yield-assembly.ts
-@@ -70,12 +70,16 @@ function appendYieldSection(
- ): void {
- 	const count = sectionCounts.get(label) ?? 0;
- 	const existing = sections[label];
-+	// For array-valued labels an array payload IS the section content (the yield
-+	// tool validates it against the whole property schema), so splat its elements
-+	// instead of nesting the array as a single element.
-+	const values = forceArray && Array.isArray(value) ? value : [value];
- 	if (count === 0) {
--		sections[label] = forceArray ? [value] : value;
-+		sections[label] = forceArray ? [...values] : value;
- 	} else if (Array.isArray(existing)) {
--		existing.push(value);
-+		existing.push(...values);
- 	} else {
--		sections[label] = [existing, value];
-+		sections[label] = [existing, ...values];
- 	}
- 	sectionCounts.set(label, count + 1);
- }
 diff --git a/packages/coding-agent/src/tools/output-schema-validator.ts b/packages/coding-agent/src/tools/output-schema-validator.ts
 index f09b469..b27482b 100644
 --- a/packages/coding-agent/src/tools/output-schema-validator.ts
@@ -104,10 +87,10 @@ index a89b50c..6a78059 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index d231d7d..2e5fdc1 100644
+index ee31b37..2eab417 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
-@@ -422,6 +422,55 @@ describe("YieldTool", () => {
+@@ -446,6 +446,55 @@ describe("YieldTool", () => {
  		).rejects.toThrow(/Section "findings" does not match schema.*body/);
  	});
  
@@ -163,3 +146,27 @@ index d231d7d..2e5fdc1 100644
  	it("leaves user-defined section labels unconstrained", async () => {
  		// Open JSON Schema output contracts can still use scratchpad/streaming
  		// sections that the agent invents at runtime, so unknown labels stay loose.
+diff --git a/packages/tui/src/tools/task-yield-assembly.ts b/packages/tui/src/tools/task-yield-assembly.ts
+index 0f0405f..fedaccd 100644
+--- a/packages/tui/src/tools/task-yield-assembly.ts
++++ b/packages/tui/src/tools/task-yield-assembly.ts
+@@ -56,12 +56,16 @@ function appendYieldSection(
+ ): void {
+ 	const count = sectionCounts.get(label) ?? 0;
+ 	const existing = sections[label];
++	// For array-valued labels an array payload IS the section content (the yield
++	// tool validates it against the whole property schema), so splat its elements
++	// instead of nesting the array as a single element.
++	const values = forceArray && Array.isArray(value) ? value : [value];
+ 	if (count === 0) {
+-		sections[label] = forceArray ? [value] : value;
++		sections[label] = forceArray ? [...values] : value;
+ 	} else if (Array.isArray(existing)) {
+-		existing.push(value);
++		existing.push(...values);
+ 	} else {
+-		sections[label] = [existing, value];
++		sections[label] = [existing, ...values];
+ 	}
+ 	sectionCounts.set(label, count + 1);
+ }
