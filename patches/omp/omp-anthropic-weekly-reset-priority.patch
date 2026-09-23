@@ -36,10 +36,10 @@ pins. Upstream also added the `usageMeasured` comparator step; the
 soonest-reset preference still ranks above it.
 
 diff --git a/packages/ai/src/auth-storage.ts b/packages/ai/src/auth-storage.ts
-index 2ac6e6b..330522f 100644
+index df8bb72..6fe487d 100644
 --- a/packages/ai/src/auth-storage.ts
 +++ b/packages/ai/src/auth-storage.ts
-@@ -79,6 +79,10 @@ import { zaiRankingStrategy, zaiUsageProvider } from "./usage/zai";
+@@ -80,6 +80,10 @@ import { zaiRankingStrategy, zaiUsageProvider } from "./usage/zai";
  export { isSqliteBusyError, isSqliteCorruptionError, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
  
  const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -50,7 +50,7 @@ index 2ac6e6b..330522f 100644
  /**
   * Primary (short, e.g. 5h) window used-fraction at or above which a candidate
   * is demoted behind cooler siblings during ranking: a nearly exhausted short
-@@ -1322,6 +1326,8 @@ type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
+@@ -1339,6 +1343,8 @@ type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
  	usageMeasured: boolean;
  	planPriority: number;
  	secondaryUsed: number;
@@ -59,7 +59,7 @@ index 2ac6e6b..330522f 100644
  	secondaryRequiredDrain: number;
  	primaryUsed: number;
  	primaryRequiredDrain: number;
-@@ -2313,6 +2319,7 @@ export class AuthStorage {
+@@ -2390,6 +2396,7 @@ export class AuthStorage {
  				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
  				planPriority: 0,
  				secondaryUsed: this.#normalizeUsageFraction(secondary),
@@ -67,7 +67,7 @@ index 2ac6e6b..330522f 100644
  				secondaryRequiredDrain: this.#computeWindowRequiredDrain(
  					secondary,
  					nowMs,
-@@ -2323,7 +2330,7 @@ export class AuthStorage {
+@@ -2400,7 +2407,7 @@ export class AuthStorage {
  				orderPos,
  			});
  		}
@@ -76,7 +76,7 @@ index 2ac6e6b..330522f 100644
  	}
  
  	async #selectApiKeyCredential(
-@@ -3016,7 +3023,11 @@ export class AuthStorage {
+@@ -3134,7 +3141,11 @@ export class AuthStorage {
  		);
  	}
  
@@ -89,7 +89,7 @@ index 2ac6e6b..330522f 100644
  		const allCredentials = this.#getCredentialsForProvider(provider);
  		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
  		if (oauthCredentials.length === 0) return undefined;
-@@ -3029,6 +3040,11 @@ export class AuthStorage {
+@@ -3147,6 +3158,11 @@ export class AuthStorage {
  		const sessionPref = this.#getSessionCredential(provider, sessionId);
  		// If the session has been routed to a stored API key, do not inject OAuth account_uuid.
  		if (sessionPref !== undefined && sessionPref.type !== "oauth") return undefined;
@@ -101,7 +101,7 @@ index 2ac6e6b..330522f 100644
  
  		// When no session-sticky credential is recorded yet (first call before any getApiKey,
  		// or all stored credentials are unavailable), the request falls through to the env-key
-@@ -3063,9 +3079,16 @@ export class AuthStorage {
+@@ -3181,9 +3197,16 @@ export class AuthStorage {
  	 * Get the OAuth account identity for a provider, preferring the credential that
  	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
  	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
@@ -120,7 +120,7 @@ index 2ac6e6b..330522f 100644
  		if (!preferred) return undefined;
  		const identity: OAuthAccountIdentity = {};
  		if (typeof preferred.accountId === "string" && preferred.accountId.length > 0) {
-@@ -4915,6 +4938,7 @@ export class AuthStorage {
+@@ -5044,6 +5067,7 @@ export class AuthStorage {
  		left: UsageRankedCandidate<AuthCredential>,
  		right: UsageRankedCandidate<AuthCredential>,
  		planRequirement: OpenAICodexPlanRequirement,
@@ -128,7 +128,7 @@ index 2ac6e6b..330522f 100644
  	): number {
  		if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
  		if (left.blocked && right.blocked) {
-@@ -4927,6 +4951,14 @@ export class AuthStorage {
+@@ -5056,6 +5080,14 @@ export class AuthStorage {
  			return left.planPriority - right.planPriority;
  		}
  		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
@@ -143,7 +143,7 @@ index 2ac6e6b..330522f 100644
  		// Short-window guard: candidates whose primary (e.g. 5h) window is
  		// nearly exhausted rank behind cool ones regardless of drain urgency —
  		// overflow lands on the next-most-urgent cool account instead.
-@@ -4959,16 +4991,18 @@ export class AuthStorage {
+@@ -5088,16 +5120,18 @@ export class AuthStorage {
  		left: UsageRankedCandidate<AuthCredential>,
  		right: UsageRankedCandidate<AuthCredential>,
  		planRequirement: OpenAICodexPlanRequirement,
@@ -164,7 +164,7 @@ index 2ac6e6b..330522f 100644
  		return candidates.map(candidate => ({
  			selection: candidate.selection,
  			usage: candidate.usage,
-@@ -5098,6 +5132,7 @@ export class AuthStorage {
+@@ -5235,6 +5269,7 @@ export class AuthStorage {
  				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
  				planPriority: getOpenAICodexPlanPriority(usage, args.planRequirement),
  				secondaryUsed: this.#normalizeUsageFraction(secondary),
@@ -172,7 +172,7 @@ index 2ac6e6b..330522f 100644
  				secondaryRequiredDrain: this.#computeWindowRequiredDrain(
  					secondary,
  					nowMs,
-@@ -5108,7 +5143,7 @@ export class AuthStorage {
+@@ -5245,7 +5280,7 @@ export class AuthStorage {
  				orderPos,
  			});
  		}
@@ -181,7 +181,7 @@ index 2ac6e6b..330522f 100644
  	}
  
  	/**
-@@ -6137,8 +6172,12 @@ export class AuthStorage {
+@@ -6280,8 +6315,12 @@ export class AuthStorage {
  	 * Pin one stored OAuth account as this session's preferred credential.
  	 *
  	 * The durable credential id keeps the pin stable across credential refreshes,
@@ -196,7 +196,7 @@ index 2ac6e6b..330522f 100644
  	 *
  	 * `options.lastUsedAtMs` backdates the sticky's last-use timestamp so a pin
  	 * restored from a persisted session keeps the provider's warm-window
-@@ -6159,6 +6198,7 @@ export class AuthStorage {
+@@ -6302,6 +6341,7 @@ export class AuthStorage {
  		const target = stored[index];
  		if (target?.credential.type !== "oauth") return false;
  		this.#recordSessionCredential(provider, sessionId, "oauth", index, options?.lastUsedAtMs);
@@ -205,10 +205,10 @@ index 2ac6e6b..330522f 100644
  	}
  
 diff --git a/packages/ai/src/usage.ts b/packages/ai/src/usage.ts
-index 44521c4..036086c 100644
+index d7f27c2..0b88959 100644
 --- a/packages/ai/src/usage.ts
 +++ b/packages/ai/src/usage.ts
-@@ -401,6 +401,11 @@ export interface CredentialRankingStrategy {
+@@ -455,6 +455,11 @@ export interface CredentialRankingStrategy {
  	 * not block unrelated families on the same OAuth credential.
  	 */
  	blockScope?(context?: CredentialRankingContext): string | undefined;
@@ -221,12 +221,12 @@ index 44521c4..036086c 100644
  	 * Scopes that apply to a request, most specific first. With a context, the
  	 * request's own scope plus any legacy catch-all scope whose blocks still
 diff --git a/packages/ai/src/usage/claude.ts b/packages/ai/src/usage/claude.ts
-index a981dd2..7edcab9 100644
+index bde0af7..6da992e 100644
 --- a/packages/ai/src/usage/claude.ts
 +++ b/packages/ai/src/usage/claude.ts
-@@ -827,5 +827,11 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
- 		const kind = getClaudeModelKind(context);
- 		return kind === "fable" || kind === "mythos" ? `tier:${kind}` : undefined;
+@@ -932,5 +932,11 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
+ 			limits: [...sharedLimits, ...report.limits.filter(limit => limit.scope.tier === tier)],
+ 		}));
  	},
 +	/**
 +	 * Anthropic weekly windows recover on a fixed schedule: burning down the
@@ -477,10 +477,10 @@ index 0000000..bf20945
 +	});
 +});
 diff --git a/packages/ai/test/auth-storage-codex-selection.test.ts b/packages/ai/test/auth-storage-codex-selection.test.ts
-index 79d0c65..99bea39 100644
+index 7bbbf9f..bd5094d 100644
 --- a/packages/ai/test/auth-storage-codex-selection.test.ts
 +++ b/packages/ai/test/auth-storage-codex-selection.test.ts
-@@ -3129,7 +3129,7 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -3283,7 +3283,7 @@ describe("AuthStorage claude oauth ranking", () => {
  		expectExclusivePreference(counts, "api-acct-best", "api-acct-base-b");
  	});
  
@@ -489,7 +489,7 @@ index 79d0c65..99bea39 100644
  		if (!authStorage) throw new Error("test setup failed");
  
  		await authStorage.set("anthropic", [
-@@ -3137,15 +3137,16 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -3291,15 +3291,16 @@ describe("AuthStorage claude oauth ranking", () => {
  			{ type: "oauth", ...createCredential("acct-cool", "cool@example.com") },
  		]);
  
@@ -510,7 +510,7 @@ index 79d0c65..99bea39 100644
  			}),
  		);
  		usageByAccount.set(
-@@ -3219,7 +3220,7 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -3373,7 +3374,7 @@ describe("AuthStorage claude oauth ranking", () => {
  		expect(apiKey).toBe("api-acct-soon");
  	});
  
@@ -519,7 +519,7 @@ index 79d0c65..99bea39 100644
  		if (!authStorage) throw new Error("test setup failed");
  
  		await authStorage.set("anthropic", [
-@@ -3254,8 +3255,9 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -3408,8 +3409,9 @@ describe("AuthStorage claude oauth ranking", () => {
  		);
  
  		const counts = await countApiKeySelections(authStorage, "anthropic", "weighted-claude-three");

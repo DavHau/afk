@@ -18,7 +18,13 @@
 # afk.nix and the required-flag tests migrated; VcsGitRepo.worktreeAdd takes
 # an options object; the yield tool's wire shape flattened `result.data` to
 # `data`; pi-iso grew clone_tree()/skip-list reflinks next to the
-# require_cow degradation seam) in patches/omp/.
+# require_cow degradation seam), then 18.2.10 (upstream moved the TUI
+# renderers into @oh-my-pi/pi-tui — status line, yield assembly, TaskItem
+# and SingleResult now live there; pruned test/task/isolation-runner.test.ts,
+# so the jj end-to-end test moved to test/task/vcs-jj-isolation.test.ts; the
+# auto-thinking classifier became judge-question based; the new keep-alive
+# release path in isolation-runner was routed through the VcsHandle seam) in
+# patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -85,11 +91,11 @@
 #   default false) plumbed settings -> structured-subagent ->
 #   isolation-runner -> ensureIsolation -> isoStart options; true
 #   restores the hard spawn failure when reflink cannot clone extents.
-# - omp-isolation-branch-capture-note: under apply=false, a configured
-#   branch capture that fell back to a .patch artifact is announced as a
-#   FAILED branch capture (with result.error) instead of rendering
-#   exactly like a configured patch-mode capture — the silence that let
-#   97 downgraded captures accumulate unnoticed (2026-08-10 incident).
+# - (dropped 18.2.10) omp-isolation-branch-capture-note: upstream's
+#   structured-subagent now renders a successful run's result.error as a
+#   `capture-error` <system-notification> (error text + patch path) before
+#   the apply=false branch, which is exactly the loud branch->patch
+#   downgrade note this patch added.
 # - omp-goal-no-pause-on-interrupt: a user interrupt no longer pauses an
 #   active goal. With interruptMode=wait a typed message queues as a steer,
 #   but the empty-Enter queue flush (and Esc) abort the turn with
@@ -113,8 +119,12 @@
 # - omp-statusline-anthropic-account: the cost segment appends the
 #   session-sticky Anthropic OAuth account email (dimmed, 40-col truncated)
 #   so the TUI shows which account a multi-subscription session is billed
-#   against; a one-shot startup getApiKey warmup attributes the session so
-#   the email appears at launch instead of at the first prompt.
+#   against; a one-shot startup warm-up attributes the session so the email
+#   appears at launch instead of at the first prompt. Since 18.2.10 the
+#   renderer lives in pi-tui and reaches auth only through StatusLineHost:
+#   the patch adds optional stickyAccount/warmAccountAttribution host
+#   methods (implemented in modes/status-line-host.ts) and a
+#   SegmentContext.accountEmail field.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -156,7 +166,6 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-auto-thinking-ceiling.patch
     ../patches/omp/omp-isolation-pinned-backend.patch
     ../patches/omp/omp-isolation-require-cow.patch
-    ../patches/omp/omp-isolation-branch-capture-note.patch
     ../patches/omp/omp-goal-no-pause-on-interrupt.patch
     ../patches/omp/omp-anthropic-weekly-reset-priority.patch
     ../patches/omp/omp-statusline-anthropic-account.patch

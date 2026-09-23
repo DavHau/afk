@@ -12,17 +12,23 @@ Depends on omp-anthropic-weekly-reset-priority.patch for
 getOAuthAccountIdentity's `sessionStickyOnly` option.
 
 What must survive a rebase:
+- The renderer (packages/tui/src/status-line) never touches auth storage;
+  it asks the host. StatusLineHost gains two OPTIONAL methods,
+  stickyAccount (sessionStickyOnly identity lookup) and
+  warmAccountAttribution (getApiKey with modelId when known), implemented
+  in coding-agent's modes/status-line-host.ts. Hosts without them (test
+  fixtures, collab guests) simply show no email.
+- component.ts #buildSegmentContext fills SegmentContext.accountEmail
+  for the anthropic provider only, from stickyAccount — nothing is shown
+  until the session is actually routed.
 - segments.ts costSegment appends `theme.fg("muted", email)` (sanitized,
-  truncated to TRUNCATE_LENGTHS.SHORT = 40 cols) after the billing
-  parts, anthropic provider only, via a sessionStickyOnly identity
-  lookup — nothing is shown until the session is actually routed.
+  truncated to TRUNCATE_LENGTHS.SHORT = 40 cols) after the billing text.
 - component.ts #warmOAuthAttribution: one-shot per provider+session,
-  runs only when an OAuth identity exists and no sticky attribution is
-  recorded yet; fire-and-forget getApiKey (with modelId when known),
-  then a repaint via #onBranchChange.
-- The warm-up call sits in #buildSegmentContext (next to
-  refreshUsageInBackground) so every status-line layout — box, the 18.x
-  default powerline band, and the plain variants — triggers it.
+  runs only when an OAuth identity exists (host.activeAccount) and no
+  sticky attribution is recorded yet; fire-and-forget warm-up, then a
+  render-cache invalidation and a repaint via #onBranchChange. It is
+  called from #buildSegmentContext so every status-line layout
+  triggers it.
 
 Rebase notes (17.2.14 -> 18.0.11): the cost segment was restructured
 upstream (formatSpend, nerd-font subscription icon, premium requests,
@@ -30,115 +36,58 @@ lazy advisor-subscription probe); the email append re-landed after the
 new billingParts assembly. The warm-up call followed the render context
 builder into #buildSegmentContext.
 
-diff --git a/packages/coding-agent/src/modes/components/status-line/component.ts b/packages/coding-agent/src/modes/components/status-line/component.ts
-index 500b5da..0fb90b7 100644
---- a/packages/coding-agent/src/modes/components/status-line/component.ts
-+++ b/packages/coding-agent/src/modes/components/status-line/component.ts
-@@ -486,6 +486,13 @@ export class StatusLineComponent implements Component {
- 	#usageFetchedAt = 0;
- 	#usageInFlight = false;
- 	#usageStartTimer: Timer | null = null;
-+	// OAuth attribution warm-up (one-shot per provider+session): before the
-+	// first getApiKey no session-sticky credential exists, so sticky-only
-+	// identity lookups (cost segment account email) stay empty and plain
-+	// lookups would name the first stored account — which usage-ranked
-+	// selection may not pick. Resolving the credential once at startup makes
-+	// the status line show the account that will actually serve the session.
-+	#authWarmupKey: string | null = null;
- 	// A timed-out request may still resolve. Its result remains eligible only
- 	// until a newer request has applied.
- 	#usageRefreshSequence = 0;
-@@ -1380,6 +1387,34 @@ export class StatusLineComponent implements Component {
- 		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
- 	}
- 
-+	/**
-+	 * One-shot per provider+session: resolve the OAuth credential the session
-+	 * will use so sticky-only identity lookups (cost segment account email)
-+	 * answer right after launch instead of at the first prompt. getApiKey runs
-+	 * the same usage-ranked selection the first request would, records the
-+	 * session-sticky credential, and is a no-op for API-key/env routing.
-+	 */
-+	#warmOAuthAttribution(): void {
-+		const session = this.session;
-+		const provider = session.state.model?.provider ?? session.model?.provider;
-+		const authStorage = session.modelRegistry?.authStorage;
-+		if (!provider || !authStorage) return;
-+		const key = `${provider}\0${session.sessionId ?? ""}`;
-+		if (this.#authWarmupKey === key) return;
-+		// Nothing to attribute: no OAuth credential in play (API key, env
-+		// override, or nothing stored) — the identity lookup is authoritative.
-+		if (!authStorage.getOAuthAccountIdentity(provider, session.sessionId)) return;
-+		this.#authWarmupKey = key;
-+		if (authStorage.getOAuthAccountIdentity(provider, session.sessionId, { sessionStickyOnly: true })) return;
-+		const modelId = session.state.model?.id ?? session.model?.id;
-+		void authStorage
-+			.getApiKey(provider, session.sessionId, modelId !== undefined ? { modelId } : undefined)
-+			.catch(() => {})
-+			.finally(() => {
-+				if (!this.#disposed && this.session === session) this.#onBranchChange?.();
-+			});
-+	}
-+
- 	/**
- 	 * Startup redraws only arm a short-delayed task; timeout releases the render
- 	 * cadence while a late successful fetch can still refresh the cached segment.
-@@ -1795,6 +1830,7 @@ export class StatusLineComponent implements Component {
- 
- 		// Trigger background fetch (5-min TTL); render uses cached value
- 		this.refreshUsageInBackground();
-+		this.#warmOAuthAttribution();
- 
- 		// Get usage statistics
- 		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
-diff --git a/packages/coding-agent/src/modes/components/status-line/segments.ts b/packages/coding-agent/src/modes/components/status-line/segments.ts
-index 8c04ce2..985ee51 100644
---- a/packages/coding-agent/src/modes/components/status-line/segments.ts
-+++ b/packages/coding-agent/src/modes/components/status-line/segments.ts
-@@ -593,7 +593,26 @@ const costSegment: StatusLineSegment = {
- 		}
- 		if (billingParts.length === 0) return { content: "", visible: false };
- 
--		return { content: theme.fg("statusLineCost", billingParts.join(" ")), visible: true };
-+		let content = theme.fg("statusLineCost", billingParts.join(" "));
-+		// Anthropic rotates between multiple OAuth accounts (session-sticky,
-+		// usage-ranked); surface which account this session is billing against.
-+		// sessionStickyOnly: before the first request no attribution exists and
-+		// the plain lookup would name the first stored account, which selection
-+		// may not pick — show nothing until the session is actually routed.
-+		// (StatusLineComponent warms the selection at startup so this resolves
-+		// right after launch instead of at the first prompt.)
-+		const accountEmail =
-+			state.model?.provider === "anthropic"
-+				? ctx.session.modelRegistry?.authStorage?.getOAuthAccountIdentity("anthropic", ctx.session.sessionId, {
-+						sessionStickyOnly: true,
-+					})?.email
-+				: undefined;
-+		if (accountEmail) {
-+			const email = truncateToWidth(sanitizeStatusText(accountEmail), TRUNCATE_LENGTHS.SHORT);
-+			if (email) content += ` ${theme.fg("muted", email)}`;
-+		}
-+
-+		return { content, visible: true };
- 	},
- };
- 
+Rebase notes (18.1.13 -> 18.2.10): upstream moved the status line into
+@oh-my-pi/pi-tui behind the StatusLineHost seam and added a render cache
+keyed on external inputs; the host methods and accountEmail field above
+replace the old direct session.modelRegistry.authStorage reads. Tests
+import from @oh-my-pi/pi-tui and pass the real statusLineHost.
+
+diff --git a/packages/coding-agent/src/modes/status-line-host.ts b/packages/coding-agent/src/modes/status-line-host.ts
+index b8a14fe..e735cab 100644
+--- a/packages/coding-agent/src/modes/status-line-host.ts
++++ b/packages/coding-agent/src/modes/status-line-host.ts
+@@ -37,6 +37,17 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
+ 	goalStatusInFooter: session => (session.settings ?? settings).get("goal.statusInFooter"),
+ 	activeAccount: (session, provider) =>
+ 		session.modelRegistry?.authStorage?.getOAuthAccountIdentity(provider, session.sessionId),
++	stickyAccount: (session, provider) =>
++		session.modelRegistry?.authStorage?.getOAuthAccountIdentity(provider, session.sessionId, {
++			sessionStickyOnly: true,
++		}),
++	warmAccountAttribution: async (session, provider, modelId) => {
++		await session.modelRegistry?.authStorage?.getApiKey(
++			provider,
++			session.sessionId,
++			modelId !== undefined ? { modelId } : undefined,
++		);
++	},
+ 	canFetchUsageReports: session => typeof session.fetchUsageReports === "function",
+ 	fetchUsageReports: (session, signal) => session.fetchUsageReports?.(signal) ?? Promise.resolve(null),
+ 	resolveActiveRepo: resolveActiveRepoContextSync,
 diff --git a/packages/coding-agent/test/status-line-auth-warmup.test.ts b/packages/coding-agent/test/status-line-auth-warmup.test.ts
 new file mode 100644
-index 0000000..e4f9db9
+index 0000000..24ee08a
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-auth-warmup.test.ts
-@@ -0,0 +1,126 @@
-+import { beforeAll, describe, expect, it } from "bun:test";
+@@ -0,0 +1,149 @@
++import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 +import { stripVTControlCharacters } from "node:util";
 +import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-+import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
-+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
++import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
++import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
++import { initTheme } from "@oh-my-pi/pi-tui/theme";
++import { StatusLineTestComponents } from "./helpers/status-line";
 +
++const statusLines = new StatusLineTestComponents();
 +beforeAll(async () => {
 +	resetSettingsForTest();
 +	await Settings.init({ inMemory: true });
 +	await initTheme();
++});
++
++afterAll(() => {
++	statusLines.dispose();
++	resetSettingsForTest();
 +});
 +
 +interface WarmupHarness {
@@ -153,50 +102,55 @@ index 0000000..e4f9db9
 +	const email = args.email ?? "ranked@example.com";
 +	let attributed = false;
 +	const getApiKeyCalls: WarmupHarness["getApiKeyCalls"] = [];
-+	const component = new StatusLineComponent({
-+		sessionId: "session-warmup",
-+		state: { messages: [], model: { contextWindow: 1000, provider, id: "test-model" } },
-+		model: { contextWindow: 1000, provider, id: "test-model" },
-+		sessionManager: {
-+			getUsageStatistics: () => ({
-+				input: 0,
-+				output: 0,
-+				cacheRead: 0,
-+				cacheWrite: 0,
-+				totalTokens: 0,
-+				orchestrationInput: 0,
-+				orchestrationOutput: 0,
-+				orchestrationCacheRead: 0,
-+				premiumRequests: 0,
-+				cost: 0,
-+			}),
-+		},
-+		fetchUsageReports: async () => [],
-+		modelRegistry: {
-+			isUsingOAuth: () => oauthStored,
-+			authStorage: {
-+				getOAuthAccountIdentity: (
-+					requestedProvider: string,
-+					_sessionId?: string,
-+					options?: { sessionStickyOnly?: boolean },
-+				) => {
-+					if (!oauthStored || requestedProvider !== provider) return undefined;
-+					if (options?.sessionStickyOnly === true && !attributed) return undefined;
-+					return { accountId: "acc-ranked", email };
++	const component = statusLines.track(
++		new StatusLineComponent(
++			{
++				sessionId: "session-warmup",
++				state: { messages: [], model: { contextWindow: 1000, provider, id: "test-model" } },
++				model: { contextWindow: 1000, provider, id: "test-model" },
++				sessionManager: {
++					getUsageStatistics: () => ({
++						input: 0,
++						output: 0,
++						cacheRead: 0,
++						cacheWrite: 0,
++						totalTokens: 0,
++						orchestrationInput: 0,
++						orchestrationOutput: 0,
++						orchestrationCacheRead: 0,
++						premiumRequests: 0,
++						cost: 0,
++					}),
 +				},
-+				getApiKey: async (requestedProvider: string, sessionId?: string, options?: { modelId?: string }) => {
-+					getApiKeyCalls.push({ provider: requestedProvider, sessionId, options });
-+					// Real selection ranks usage before recording stickiness; keep
-+					// the flip asynchronous so the pre-warm-up render is observable.
-+					await Promise.resolve();
-+					attributed = true;
-+					return "oat-ranked";
++				fetchUsageReports: async () => [],
++				modelRegistry: {
++					isUsingOAuth: () => oauthStored,
++					authStorage: {
++						getOAuthAccountIdentity: (
++							requestedProvider: string,
++							_sessionId?: string,
++							options?: { sessionStickyOnly?: boolean },
++						) => {
++							if (!oauthStored || requestedProvider !== provider) return undefined;
++							if (options?.sessionStickyOnly === true && !attributed) return undefined;
++							return { accountId: "acc-ranked", email };
++						},
++						getApiKey: async (requestedProvider: string, sessionId?: string, options?: { modelId?: string }) => {
++							getApiKeyCalls.push({ provider: requestedProvider, sessionId, options });
++							// Real selection ranks usage before recording stickiness; keep
++							// the flip asynchronous so the pre-warm-up render is observable.
++							await Promise.resolve();
++							attributed = true;
++							return "oat-ranked";
++						},
++					},
 +				},
-+			},
-+		},
-+		getAsyncJobSnapshot: () => ({ running: [] }),
-+		getContextUsage: () => undefined,
-+	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0]);
++				getAsyncJobSnapshot: () => ({ running: [] }),
++				getContextUsage: () => undefined,
++			} as unknown as ConstructorParameters<typeof StatusLineComponent>[0],
++			statusLineHost,
++		),
++	);
 +	component.updateSettings({
 +		preset: "custom",
 +		leftSegments: [],
@@ -234,8 +188,10 @@ index 0000000..e4f9db9
 +		});
 +	});
 +
-+	it("shows the attributed account email right after the warm-up resolves", async () => {
++	it("shows the attributed account email only once the warm-up resolves", async () => {
 +		const h = makeHarness({});
++		// Before attribution the sticky lookup is empty: the plain lookup would
++		// name the first stored account, which selection may not pick.
 +		const before = stripVTControlCharacters(h.component.getTopBorder(200).content);
 +		expect(before).not.toContain("ranked@example.com");
 +
@@ -245,6 +201,14 @@ index 0000000..e4f9db9
 +		// Warm-up completion must request a repaint so the email appears
 +		// without waiting for the next unrelated UI event.
 +		expect(h.renderRequests()).toBeGreaterThan(0);
++	});
++
++	it("never shows an account email for non-Anthropic providers", async () => {
++		const h = makeHarness({ provider: "openai-codex" });
++		h.component.getTopBorder(200);
++		await flushAsync();
++
++		expect(stripVTControlCharacters(h.component.getTopBorder(200).content)).not.toContain("ranked@example.com");
 +	});
 +
 +	it("skips the warm-up when no OAuth credential is in play", async () => {
@@ -257,28 +221,21 @@ index 0000000..e4f9db9
 +});
 diff --git a/packages/coding-agent/test/status-line-cost-account.test.ts b/packages/coding-agent/test/status-line-cost-account.test.ts
 new file mode 100644
-index 0000000..e4c0890
+index 0000000..ca38bc7
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-cost-account.test.ts
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,61 @@
 +import { beforeAll, describe, expect, it } from "bun:test";
 +import { stripVTControlCharacters } from "node:util";
-+import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
-+import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/types";
-+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
++import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
++import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/types";
++import { initTheme } from "@oh-my-pi/pi-tui/theme";
 +
 +beforeAll(async () => {
 +	await initTheme();
 +});
 +
-+function ctxWith(args: {
-+	cost?: number;
-+	provider?: string;
-+	oauth?: boolean;
-+	identity?: { email?: string; accountId?: string };
-+	/** Session-sticky attribution exists (default true). */
-+	attributed?: boolean;
-+}): SegmentContext {
++function ctxWith(args: { cost?: number; oauth?: boolean; accountEmail?: string }): SegmentContext {
 +	return {
 +		usageStats: {
 +			input: 0,
@@ -293,84 +250,165 @@ index 0000000..e4c0890
 +			cost: args.cost ?? 0,
 +			tokensPerSecond: null,
 +		},
++		accountEmail: args.accountEmail,
 +		session: {
-+			sessionId: "session-1",
-+			state: { model: args.provider ? { provider: args.provider, id: "test-model" } : undefined },
-+			modelRegistry: {
-+				isUsingOAuth: () => args.oauth ?? false,
-+				authStorage: {
-+					getOAuthAccountIdentity: (
-+						provider: string,
-+						_sessionId?: string,
-+						options?: { sessionStickyOnly?: boolean },
-+					) => {
-+						if (provider !== args.provider) return undefined;
-+						if (options?.sessionStickyOnly === true && args.attributed === false) return undefined;
-+						return args.identity;
-+					},
-+				},
-+			},
++			state: { model: { provider: "anthropic", id: "test-model" } },
++			modelRegistry: { isUsingOAuth: () => args.oauth ?? false },
 +		},
 +	} as unknown as SegmentContext;
 +}
 +
-+function plain(text: string): string {
-+	return stripVTControlCharacters(text);
-+}
-+
 +describe("cost status-line segment account email", () => {
-+	it("appends the active Anthropic account email next to the cost", () => {
-+		const result = renderSegment(
-+			"cost",
-+			ctxWith({ cost: 1.23, provider: "anthropic", oauth: true, identity: { email: "a@example.com" } }),
-+		);
++	it("appends the attributed account email after the cost", () => {
++		const result = renderSegment("cost", ctxWith({ cost: 1.23, oauth: true, accountEmail: "a@example.com" }));
 +		expect(result.visible).toBe(true);
-+		const text = plain(result.content);
++		const text = stripVTControlCharacters(result.content);
 +		expect(text).toContain("1.23");
-+		expect(text).toContain("a@example.com");
-+		expect(text.indexOf("a@example.com")).toBeGreaterThan(text.indexOf("$1.23"));
++		expect(text.indexOf("a@example.com")).toBeGreaterThan(text.indexOf("1.23"));
 +	});
 +
 +	it("shows the email even at zero cost while on subscription", () => {
-+		const result = renderSegment(
-+			"cost",
-+			ctxWith({ provider: "anthropic", oauth: true, identity: { email: "a@example.com" } }),
-+		);
++		const result = renderSegment("cost", ctxWith({ oauth: true, accountEmail: "a@example.com" }));
 +		expect(result.visible).toBe(true);
-+		const text = plain(result.content);
-+		expect(text).toContain("(sub)");
-+		expect(text).toContain("a@example.com");
++		expect(stripVTControlCharacters(result.content)).toContain("a@example.com");
 +	});
 +
-+	it("hides the email for non-Anthropic providers", () => {
-+		const result = renderSegment(
-+			"cost",
-+			ctxWith({ cost: 1.23, provider: "openai-codex", oauth: true, identity: { email: "a@example.com" } }),
-+		);
++	it("omits the email when no account is attributed", () => {
++		const result = renderSegment("cost", ctxWith({ cost: 1.23, oauth: true }));
 +		expect(result.visible).toBe(true);
-+		expect(plain(result.content)).not.toContain("a@example.com");
++		expect(stripVTControlCharacters(result.content)).not.toContain("@");
 +	});
 +
-+	it("omits the email when no OAuth identity is attributed", () => {
-+		const result = renderSegment("cost", ctxWith({ cost: 1.23, provider: "anthropic", oauth: true }));
-+		expect(result.visible).toBe(true);
-+		expect(plain(result.content)).not.toContain("@");
-+	});
-+
-+	it("hides the first-account fallback email before the session is attributed", () => {
-+		const result = renderSegment(
-+			"cost",
-+			ctxWith({
-+				cost: 1.23,
-+				provider: "anthropic",
-+				oauth: true,
-+				identity: { email: "a@example.com" },
-+				attributed: false,
-+			}),
-+		);
-+		expect(result.visible).toBe(true);
-+		const text = plain(result.content);
-+		expect(text).toContain("1.23");
-+		expect(text).not.toContain("a@example.com");
++	it("strips control sequences from the email and truncates it", () => {
++		const long = `\u001b[31m${"x".repeat(60)}@example.com`;
++		const text = stripVTControlCharacters(renderSegment("cost", ctxWith({ cost: 1.23, oauth: true, accountEmail: long })).content);
++		expect(text).not.toContain("\u001b[31m");
++		expect(text).not.toContain("@example.com");
 +	});
 +});
+diff --git a/packages/tui/src/status-line/component.ts b/packages/tui/src/status-line/component.ts
+index 92fb1f3..7218494 100644
+--- a/packages/tui/src/status-line/component.ts
++++ b/packages/tui/src/status-line/component.ts
+@@ -581,6 +581,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 	#usageFetchedAt = 0;
+ 	#usageInFlight = false;
+ 	#usageStartTimer: Timer | null = null;
++	// OAuth attribution warm-up (one-shot per provider+session): before the
++	// first getApiKey no session-sticky credential exists, so sticky-only
++	// identity lookups (cost segment account email) stay empty and plain
++	// lookups would name the first stored account — which usage-ranked
++	// selection may not pick. Resolving the credential once at startup makes
++	// the status line show the account that will actually serve the session.
++	#authWarmupKey: string | null = null;
+ 	// A timed-out request may still resolve. Its result remains eligible only
+ 	// until a newer request has applied.
+ 	#usageRefreshSequence = 0;
+@@ -1646,6 +1653,35 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
+ 	}
+ 
++	/**
++	 * One-shot per provider+session: resolve the OAuth credential the session
++	 * will use so sticky-only identity lookups (cost segment account email)
++	 * answer right after launch instead of at the first prompt. getApiKey runs
++	 * the same usage-ranked selection the first request would, records the
++	 * session-sticky credential, and is a no-op for API-key/env routing.
++	 */
++	#warmOAuthAttribution(): void {
++		const session = this.session;
++		const provider = session.state.model?.provider ?? session.model?.provider;
++		if (!provider || !this.host.warmAccountAttribution || !this.host.stickyAccount) return;
++		const key = `${provider}\0${session.sessionManager?.getSessionId?.() ?? ""}`;
++		if (this.#authWarmupKey === key) return;
++		// Nothing to attribute: no OAuth credential in play (API key, env
++		// override, or nothing stored) — the identity lookup is authoritative.
++		if (!this.host.activeAccount(session, provider)) return;
++		this.#authWarmupKey = key;
++		if (this.host.stickyAccount(session, provider)) return;
++		const modelId = session.state.model?.id ?? session.model?.id;
++		void this.host
++			.warmAccountAttribution(session, provider, modelId)
++			.catch(() => {})
++			.finally(() => {
++				if (this.#disposed || this.session !== session) return;
++				this.#invalidateStatusLineRenderCache();
++				this.#onBranchChange?.();
++			});
++	}
++
+ 	/**
+ 	 * Startup redraws only arm a short-delayed task; timeout releases the render
+ 	 * cadence while a late successful fetch can still refresh the cached segment.
+@@ -2106,6 +2142,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 
+ 		// Trigger background fetch (5-min TTL); render uses cached value
+ 		this.refreshUsageInBackground();
++		this.#warmOAuthAttribution();
++		const accountEmail =
++			state.model?.provider === "anthropic"
++				? this.host.stickyAccount?.(this.session, "anthropic")?.email
++				: undefined;
+ 
+ 		// Get usage statistics
+ 		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
+@@ -2184,6 +2225,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+ 			stream: this.#streamStatus,
+ 			recording: this.#recording,
+ 			usageStats,
++			accountEmail,
+ 			contextPercent,
+ 			contextTokens,
+ 			contextWindow,
+diff --git a/packages/tui/src/status-line/host.ts b/packages/tui/src/status-line/host.ts
+index e4dff78..a5c39eb 100644
+--- a/packages/tui/src/status-line/host.ts
++++ b/packages/tui/src/status-line/host.ts
+@@ -83,6 +83,10 @@ export interface StatusLineHost<TSession extends StatusLineSession = StatusLineS
+ 	getSessionSettingsRevision(session: TSession): number;
+ 	goalStatusInFooter(session: TSession): boolean;
+ 	activeAccount(session: TSession, provider: string): StatusAccountIdentity | undefined;
++	/** Session-sticky OAuth identity only; `undefined` until the session has routed a request. */
++	stickyAccount?(session: TSession, provider: string): StatusAccountIdentity | undefined;
++	/** Run the credential selection the session's first request would, recording its sticky account. */
++	warmAccountAttribution?(session: TSession, provider: string, modelId: string | undefined): Promise<void>;
+ 	canFetchUsageReports(session: TSession): boolean;
+ 	fetchUsageReports(session: TSession, signal: AbortSignal): Promise<unknown>;
+ 	resolveActiveRepo(cwd: string): ActiveRepoContext | null;
+diff --git a/packages/tui/src/status-line/segments.ts b/packages/tui/src/status-line/segments.ts
+index 8153d8f..319aa16 100644
+--- a/packages/tui/src/status-line/segments.ts
++++ b/packages/tui/src/status-line/segments.ts
+@@ -592,7 +592,14 @@ const costSegment: StatusLineSegment = {
+ 		);
+ 		if (!billing) return { content: "", visible: false };
+ 
+-		return { content: theme.fg("statusLineCost", billing), visible: true };
++		let content = theme.fg("statusLineCost", billing);
++		// Anthropic rotates between multiple OAuth accounts (session-sticky,
++		// usage-ranked); name the account this session is billing against.
++		if (ctx.accountEmail) {
++			const email = truncateToWidth(sanitizeStatusText(ctx.accountEmail), TRUNCATE_LENGTHS.SHORT);
++			if (email) content += ` ${theme.fg("muted", email)}`;
++		}
++		return { content, visible: true };
+ 	},
+ };
+ 
+diff --git a/packages/tui/src/status-line/types.ts b/packages/tui/src/status-line/types.ts
+index 5623724..011616c 100644
+--- a/packages/tui/src/status-line/types.ts
++++ b/packages/tui/src/status-line/types.ts
+@@ -141,6 +141,12 @@ export interface SegmentContext {
+ 		cost: number;
+ 		tokensPerSecond: number | null;
+ 	};
++	/**
++	 * Email of the Anthropic OAuth account this session is sticky to, shown by
++	 * the cost segment. Absent before the session is routed, so the bar never
++	 * names an account selection may not pick.
++	 */
++	accountEmail?: string;
+ 	/** Context usage percent, or null when unknown (e.g. right after compaction). */
+ 	contextPercent: number | null;
+ 	contextTokens: number;

@@ -39,6 +39,10 @@ pinned locally, so the original failure is not reproduced line-by-line; the
    `<system-notification>` naming the FAILED branch capture with
    `result.error` and the artifact path; error-with-no-artifact gets its own
    loud "changes were lost" notification.
+   Since omp 18.2.10 upstream covers this itself: a successful run with
+   `result.error` renders a `capture-error` `<system-notification>` (error
+   text plus patch path) ahead of the apply=false summary, so the patch was
+   dropped.
 3. **AC4, amended.** "Fails the spawn loudly" is wrong at capture time — the
    subagent's work already exists, and destroying it would be worse than the
    downgrade. The invariant shipped instead: the downgrade can no longer be

@@ -35,8 +35,12 @@ What must survive a rebase:
   contains "isolated" in batch-item and flat wire schemas and not when
   isolation is off.
 
+Rebased 18.1.13 -> 18.2.10: the TaskItem interface moved to
+packages/tui/src/tools/task.ts; its `isolated` doc comment follows it
+there.
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index eee64b6..fd69f99 100644
+index 469cc2a..9196033 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -26,7 +26,7 @@
@@ -58,7 +62,7 @@ index eee64b6..fd69f99 100644
  There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
  
 diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
-index f46486f..e9a4968 100644
+index 0b33c4d..5e8d369 100644
 --- a/packages/coding-agent/src/prompts/tools/task.md
 +++ b/packages/coding-agent/src/prompts/tools/task.md
 @@ -36,9 +36,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking
@@ -86,10 +90,10 @@ index f46486f..e9a4968 100644
  {{/if}}
  {{/if}}
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index b4b5cf8..f48c1a3 100644
+index 241fef4..81c05f6 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
-@@ -127,7 +127,7 @@ const taskItemSchemaIsolated = type({
+@@ -61,7 +61,7 @@ const taskItemSchemaIsolated = type({
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
  	"tools?": "string[]",
@@ -98,21 +102,7 @@ index b4b5cf8..f48c1a3 100644
  	"+": "delete",
  });
  
-@@ -147,7 +147,12 @@ export interface TaskItem {
- 	schemaMode?: "permissive" | "strict";
- 	/** Eval-defined tool names exposed to this child. */
- 	tools?: string[];
--	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
-+	/**
-+	 * Run this spawn in an isolated worktree (batch form; flat form carries it
-+	 * top-level). Required on the wire when isolation is enabled — the model
-+	 * must choose explicitly; optional here because args stream in partially
-+	 * and internal callers bypass arktype.
-+	 */
- 	isolated?: boolean;
- }
- 
-@@ -158,7 +163,7 @@ export const taskSchema = type({
+@@ -72,7 +72,7 @@ export const taskSchema = type({
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
  	"tools?": "string[]",
@@ -121,7 +111,7 @@ index b4b5cf8..f48c1a3 100644
  	"+": "delete",
  });
  const taskSchemaNoIsolation = type({
-@@ -218,7 +223,7 @@ function createTaskSchema(options: {
+@@ -132,7 +132,7 @@ function createTaskSchema(options: {
  				"outputSchema?": outputSchemaInputSchema,
  				"schemaMode?": '"permissive" | "strict"',
  				...toolsField,
@@ -130,7 +120,7 @@ index b4b5cf8..f48c1a3 100644
  				"+": "delete",
  			});
  			return type.raw({
-@@ -252,7 +257,7 @@ function createTaskSchema(options: {
+@@ -166,7 +166,7 @@ function createTaskSchema(options: {
  			"outputSchema?": outputSchemaInputSchema,
  			"schemaMode?": '"permissive" | "strict"',
  			...toolsField,
@@ -140,10 +130,10 @@ index b4b5cf8..f48c1a3 100644
  		});
  	}
 diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
-index e910e5c..28cbf3a 100644
+index e13eac6..cab98cf 100644
 --- a/packages/coding-agent/test/task/task-batch.test.ts
 +++ b/packages/coding-agent/test/task/task-batch.test.ts
-@@ -199,6 +199,41 @@ describe("task.batch schema gating", () => {
+@@ -200,6 +200,41 @@ describe("task.batch schema gating", () => {
  		}
  		expect(isolatedSchema.type).toBe("boolean");
  		expect(itemProperties.apply).toBeUndefined();
@@ -213,11 +203,11 @@ index 115bbcc..2845e00 100644
  			tools: ["word_count"],
  			context: "shared background",
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index 1c2c0ef..78a70cf 100644
+index bd8a95e..faf0932 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
-@@ -6,9 +6,10 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
- import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/types";
+@@ -7,9 +7,10 @@ import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
+ import { oneLineLabel } from "@oh-my-pi/pi-tui/tools/task";
  import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
  
 -// Contract: the task tool's wire shape is flat `{ name?, agent?, task, isolated? }`
@@ -230,7 +220,7 @@ index 1c2c0ef..78a70cf 100644
  // `description`) are stripped by the schema's `+: "delete"` — never rejected.
  
  describe("oneLineLabel", () => {
-@@ -49,7 +50,7 @@ function parsedItems(parsed: unknown): Array<Record<string, unknown>> {
+@@ -50,7 +51,7 @@ function parsedItems(parsed: unknown): Array<Record<string, unknown>> {
  
  describe("task wire schema", () => {
  	it("accepts the flat { name, agent, task } shape", () => {
@@ -239,7 +229,7 @@ index 1c2c0ef..78a70cf 100644
  		expect(parsed instanceof type.errors).toBe(false);
  		if (!(parsed instanceof type.errors)) {
  			expect(parsed.name).toBe("AuthLoader");
-@@ -59,15 +60,28 @@ describe("task wire schema", () => {
+@@ -60,15 +61,28 @@ describe("task wire schema", () => {
  	});
  
  	it("defaults a missing agent to 'task'", () => {
@@ -270,3 +260,21 @@ index 1c2c0ef..78a70cf 100644
  		expect(parsed instanceof type.errors).toBe(false);
  		if (!(parsed instanceof type.errors)) {
  			expect("role" in parsed).toBe(false);
+diff --git a/packages/tui/src/tools/task.ts b/packages/tui/src/tools/task.ts
+index 9e0314e..785a85a 100644
+--- a/packages/tui/src/tools/task.ts
++++ b/packages/tui/src/tools/task.ts
+@@ -1720,7 +1720,12 @@ export interface TaskItem {
+ 	schemaMode?: "permissive" | "strict";
+ 	/** Eval-defined tool names exposed to this child. */
+ 	tools?: string[];
+-	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
++	/**
++	 * Run this spawn in an isolated worktree (batch form; flat form carries it
++	 * top-level). Required on the wire when isolation is enabled — the model
++	 * must choose explicitly; optional here because args stream in partially
++	 * and internal callers bypass arktype.
++	 */
+ 	isolated?: boolean;
+ }
+ 
