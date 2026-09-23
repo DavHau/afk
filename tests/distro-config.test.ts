@@ -46,7 +46,7 @@ describe("distribution settings layer", () => {
 	});
 
 	it("pins subagent isolation to reflink", () => {
-		expect(configGet("task.isolation.mode")).toBe("reflink");
+		expect(configGet("isolation.backend")).toBe("reflink");
 	});
 
 	it("leaves requireCow off so non-CoW hosts degrade to byte copies", () => {
