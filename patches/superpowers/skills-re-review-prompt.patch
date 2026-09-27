@@ -18,7 +18,7 @@ What must survive a rebase:
 - Finding Verdicts cite the RED evidence alongside file:line.
 
 diff --git a/skills/subagent-driven-development/re-review-prompt.md b/skills/subagent-driven-development/re-review-prompt.md
-index 18b0fb8..b7f1cb6 100644
+index d49c182..9eb2102 100644
 --- a/skills/subagent-driven-development/re-review-prompt.md
 +++ b/skills/subagent-driven-development/re-review-prompt.md
 @@ -8,10 +8,8 @@ new breakage. It is not a fresh review — the full review already happened.
@@ -42,7 +42,7 @@ index 18b0fb8..b7f1cb6 100644
  
      **Fix base:** [FIX_BASE_SHA] (the head the previous review saw)
      **Head:** [HEAD_SHA]
-@@ -54,13 +52,18 @@ Subagent (general-purpose):
+@@ -63,13 +61,18 @@ Subagent (general-purpose):
  
      ## Tests
  
@@ -68,7 +68,7 @@ index 18b0fb8..b7f1cb6 100644
  
      ## Output Format
  
-@@ -72,8 +75,10 @@ Subagent (general-purpose):
+@@ -81,8 +84,10 @@ Subagent (general-purpose):
  
      For each finding in The Findings Under Verification, in order:
      - **[finding one-liner]** — ADDRESSED | NOT ADDRESSED, with file:line
@@ -81,7 +81,7 @@ index 18b0fb8..b7f1cb6 100644
  
      ### New Breakage in the Fix Diff
  
-@@ -92,15 +97,15 @@ Subagent (general-purpose):
+@@ -101,15 +106,15 @@ Subagent (general-purpose):
  ```
  
  **Placeholders:**
@@ -97,8 +97,8 @@ index 18b0fb8..b7f1cb6 100644
 +- `[REPORT_URI]` — the `local://task-N-report.md` URI (fix reports appended)
  - `[FIX_BASE_SHA]` — the head the previous review saw
  - `[HEAD_SHA]` — current commit
--- `[DIFF_FILE]` — the path `scripts/review-package PLAN_FILE FIX_BASE HEAD` printed
-+- `[DIFF_FILE]` — the path `scripts/review-package PLAN_FILE "$(git merge-base HEAD <fixref>)" <fixref>` printed
+-- `[DIFF_FILE]` — the path `bash scripts/review-package PLAN_FILE FIX_BASE HEAD` printed
++- `[DIFF_FILE]` — the path `bash scripts/review-package PLAN_FILE "$(git merge-base HEAD <fixref>)" <fixref>` printed
  
  **Re-reviewer returns:** per-finding verdicts (ADDRESSED / NOT ADDRESSED),
  new breakage in the fix diff, out-of-scope observations, and a round verdict.

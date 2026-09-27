@@ -30,13 +30,17 @@ What must survive a rebase:
   per-finding RED (command + failing output + why expected) / GREEN
   (command + passing output) or the NOT TESTABLE line; the short return
   contract matches the implementer template.
+- "You Do Not Dispatch Subagents" section, mirroring the contract
+  upstream v6.3.0 added to the implementer and reviewer templates: the
+  fixer never spawns helpers or a reviewer — the controller's scoped
+  re-review is the only review seat for a fix round.
 
 diff --git a/skills/subagent-driven-development/fixer-prompt.md b/skills/subagent-driven-development/fixer-prompt.md
 new file mode 100644
-index 0000000..848e37f
+index 0000000..4ede16a
 --- /dev/null
 +++ b/skills/subagent-driven-development/fixer-prompt.md
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,122 @@
 +# Fix Subagent Prompt Template
 +
 +Use this template when dispatching a fix round. `isolated: true` below is a
@@ -103,6 +107,14 @@ index 0000000..848e37f
 +    value, wrong contract, missing validation, wrong ordering — is
 +    testable and gets the cycle. Do not stretch this hatch to avoid
 +    writing a test.
++
++    ## You Do Not Dispatch Subagents
++
++    Do all of this round's work yourself. Never spawn a subagent to fix
++    part of it, and never spawn a reviewer to check your fix: the
++    controller dispatches a scoped re-review against your diff after you
++    report. A reviewer you spawn duplicates that review at full cost, and
++    its approval counts for nothing in the process. Report instead.
 +
 +    Do NOT run git or jj — you work in an isolated snapshot and the harness
 +    captures your changes automatically when you finish.

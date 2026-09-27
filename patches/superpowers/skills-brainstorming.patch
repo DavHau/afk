@@ -11,41 +11,60 @@ execution in the middle of a design conversation.
 `blocked` is the existing, documented state for "open but waiting on
 external input", and both reminder paths filter to pending/in_progress
 only, so blocking the phase suppresses them without disabling reminders
-globally or touching omp. A forgotten unblock cannot strand the list:
-writing-plans opens with a fresh `todo init`, which replaces the phases
-outright.
+globally or touching omp. A forgotten unblock cannot strand the list on
+the architectural path: writing-plans opens with a fresh `todo init`,
+which replaces the phases outright. The spike and bounded paths (upstream
+v6.3.0 three-path router) never reach writing-plans, so their own
+post-approval step carries the unblock.
 
 What must survive a rebase:
-- The block instruction sits with the checklist preamble, so it runs
-  before the first turn that can end with open todos.
-- Checklist item 9 (transition to implementation) unblocks before
-  handing off to writing-plans.
+- The block instruction sits with the checklist preamble (after "create a
+  task for each item on your path"), so it runs before the first turn
+  that can end with open todos, whichever path was classified.
+- Every path unblocks at its first post-approval step: spike step 4
+  (Investigate), bounded step 5 (Implement), architectural step 9
+  (transition to implementation, before handing off to writing-plans).
 - Document-reviewer template dispatches the `reviewer` agent (task
   tool), never `general-purpose` — no such agent exists here.
 
 diff --git a/skills/brainstorming/SKILL.md b/skills/brainstorming/SKILL.md
-index 789c3a1..fc5875f 100644
+index e3f1788..04050be 100644
 --- a/skills/brainstorming/SKILL.md
 +++ b/skills/brainstorming/SKILL.md
-@@ -19,7 +19,16 @@ Every project goes through this process. A todo list, a single-function utility,
+@@ -112,11 +112,22 @@ complete that path's reviews before implementation.
+ Classify first, announce the path, then create a task for each item on
+ your path and complete them in order.
  
- ## Checklist
- 
--You MUST create a task for each of these items and complete them in order:
-+You MUST create a task for each of these items and complete them in order.
-+
 +**Immediately after creating that task list, block the phase:** call the todo
 +tool with `op: "block"`, `phase: "<the phase you just created>"`, and
 +`reason: "brainstorming: awaiting user input"`. Brainstorming is a dialogue —
 +every question, every approval gate ends your turn with open todos, and the
 +harness reads that as abandoned work and nudges you back toward execution
 +mid-conversation. Blocked tasks are open but excluded from that reminder, which
-+is exactly the state a brainstorm is in: waiting on external input. Unblock at
-+step 9, before you hand off to writing-plans.
++is exactly the state a brainstorm is in: waiting on external input. Unblock
++(todo tool, `op: "unblock"`, same `phase`) the moment the dialogue ends and
++work resumes: before Investigate (spike), before Implement (bounded), before
++the hand-off to writing-plans (architectural).
++
+ **Spike:**
+ 1. **Explore project context** — enough to frame the probe
+ 2. **Present question + probe plan** — 2-3 sentences
+ 3. **Get approval** — a nod is enough
+-4. **Investigate** — as cheaply as correctness allows
++4. **Investigate** — unblock the phase first; then as cheaply as correctness allows
+ 5. **Report findings** — a recommendation; label anything built as throwaway
  
+ **Bounded:**
+@@ -124,7 +135,7 @@ your path and complete them in order.
+ 2. **Ask clarifying questions** — one at a time, the ones that matter
+ 3. **Present short design in chat** — approach, files touched, testing
+ 4. **Get approval** — STOP and wait for an explicit yes; presenting the design and starting in the same breath is skipping the gate
+-5. **Implement** — proceed with the normal development workflow (TDD applies); no plan document
++5. **Implement** — unblock the phase, then proceed with the normal development workflow (TDD applies); no plan document
+ 
+ **Architectural:**
  1. **Explore project context** — check files, docs, recent commits
- 2. **Offer the visual companion just-in-time** — NOT upfront. The first time a question would genuinely be clearer shown than described, offer it then (its own message); on approval its browser tab opens for you. If no visual question ever arises, never offer it. See the Visual Companion section below.
-@@ -29,7 +38,7 @@ You MUST create a task for each of these items and complete them in order:
+@@ -135,7 +146,7 @@ your path and complete them in order.
  6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
  7. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
  8. **User reviews written spec** — ask user to review the spec file before proceeding
@@ -55,7 +74,10 @@ index 789c3a1..fc5875f 100644
  ## Process Flow
  
 diff --git a/skills/brainstorming/spec-document-reviewer-prompt.md b/skills/brainstorming/spec-document-reviewer-prompt.md
-@@ -7,7 +7,7 @@
+index 6099312..db6249f 100644
+--- a/skills/brainstorming/spec-document-reviewer-prompt.md
++++ b/skills/brainstorming/spec-document-reviewer-prompt.md
+@@ -7,7 +7,7 @@ Use this template when dispatching a spec document reviewer subagent.
  **Dispatch after:** Spec document is written to docs/superpowers/specs/
  
  ```

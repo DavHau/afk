@@ -13,7 +13,7 @@ What must survive a rebase:
   files at other revisions; never create worktrees, never move HEAD.
 
 diff --git a/skills/requesting-code-review/SKILL.md b/skills/requesting-code-review/SKILL.md
-index fa4f2f9..9c98ad2 100644
+index 6d995da..456e270 100644
 --- a/skills/requesting-code-review/SKILL.md
 +++ b/skills/requesting-code-review/SKILL.md
 @@ -31,7 +31,7 @@ HEAD_SHA=$(git rev-parse HEAD)
@@ -26,7 +26,7 @@ index fa4f2f9..9c98ad2 100644
  **Placeholders:**
  - `{DESCRIPTION}` - Brief summary of what you built
 diff --git a/skills/requesting-code-review/code-reviewer.md b/skills/requesting-code-review/code-reviewer.md
-index db84ae2..47042fa 100644
+index 6d358b5..9dc5da2 100644
 --- a/skills/requesting-code-review/code-reviewer.md
 +++ b/skills/requesting-code-review/code-reviewer.md
 @@ -5,7 +5,7 @@ Use this template when dispatching a code reviewer subagent.
@@ -38,12 +38,12 @@ index db84ae2..47042fa 100644
    description: "Review code changes"
    prompt: |
      You are a Senior Code Reviewer with expertise in software architecture,
-@@ -32,7 +32,7 @@ Subagent (general-purpose):
+@@ -49,7 +49,7 @@ Subagent (general-purpose):
  
      ## Read-Only Review
  
 -    Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state in any way. Use tools like `git show`, `git diff`, and `git log` to inspect history. If you need a working copy of a different revision, check it out into a separate temporary directory (e.g. `git worktree add /tmp/review-[SHA] [SHA]`) — never move HEAD on this checkout.
 +    Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state in any way. Use tools like `git show`, `git diff`, and `git log` to inspect history; read files at other revisions with `git show [SHA]:path/to/file`. Never create worktrees and never move HEAD on this checkout.
  
-     ## What to Check
+     ## You Do Not Dispatch Subagents
  

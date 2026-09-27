@@ -22,12 +22,17 @@ What must survive a rebase:
   gated on the typed word `discard`, with op-log recovery named.
 - Dropped on purpose: Step 2 environment detection (GIT_DIR vs
   GIT_COMMON), the detached-HEAD 2-option menu, and Step 6 workspace
-  cleanup — all worktree-only concepts.
+  cleanup — all worktree-only concepts. Upstream v6.3.0's "If removal is
+  refused" sub-step and its `--force` rationalization row live inside
+  Step 6 / worktree cleanup and go with it.
 - Upstream restructures can be discarded wholesale; regenerate this
   patch as a full-body replacement.
 
 diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a-development-branch/SKILL.md
-@@ -7,9 +7,24 @@
+index fa8aeca..9d9ca97 100644
+--- a/skills/finishing-a-development-branch/SKILL.md
++++ b/skills/finishing-a-development-branch/SKILL.md
+@@ -7,10 +7,25 @@ description: Use when implementation is complete, all tests pass, and you need t
  
  ## Overview
  
@@ -43,17 +48,18 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
 +stack → Present options → Execute choice.
  
  **Announce at start:** "I'm using the finishing-a-development-branch skill to complete this work."
-+
+ 
 +**NEVER run `git checkout`, `git merge`, `git branch -d/-D`, `git pull`, or
 +`git worktree remove` here.** This repo is jj-colocated: those commands move
 +HEAD or delete refs out from under the jj working copy, and the resulting
 +divergence is the expensive kind to undo. Integration is `jj` bookmarks and
 +`jj git push`; read-only git plumbing (`show`, `diff`, `log`, `for-each-ref`)
 +stays fine.
- 
++
  ## Step 1: Verify Tests
  
-@@ -25,52 +40,44 @@
+ Run the project's full test suite (`npm test` / `cargo test` / `pytest` / `go test ./...`).
+@@ -25,52 +40,44 @@ Tests failing (<N> failures). Must fix before completing:
  
  **If tests pass:** continue to Step 2.
  
@@ -100,28 +106,28 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
  ## Step 4: Present Options
  
 -**Normal repo and named-branch worktree — present exactly these 3 options:**
-+Determine what this stack forks from — `trunk()` unless the plan or the
-+conversation says otherwise. If it is not already known, ask: "This stack
-+splits from <your best guess> - is that correct?" Confirm before pushing:
-+publishing onto the wrong base is expensive to undo.
-+
-+Present exactly these 3 options:
- 
- ```
- Implementation complete. What would you like to do?
- 
+-
+-```
+-Implementation complete. What would you like to do?
+-
 -1. Merge back to <base-branch> locally
 -2. Push and create a Pull Request
 -3. Keep the branch as-is (I'll handle it later)
 -
 -Which option?
 -```
--
++Determine what this stack forks from — `trunk()` unless the plan or the
++conversation says otherwise. If it is not already known, ask: "This stack
++splits from <your best guess> - is that correct?" Confirm before pushing:
++publishing onto the wrong base is expensive to undo.
+ 
 -**Detached HEAD — present exactly these 2 options:**
--
--```
++Present exactly these 3 options:
+ 
+ ```
 -Implementation complete. You're on a detached HEAD (externally managed workspace).
--
++Implementation complete. What would you like to do?
+ 
 -1. Push as new branch and create a Pull Request
 -2. Keep as-is (I'll handle it later)
 +1. Move <trunk-bookmark> to this stack and push it
@@ -130,7 +136,7 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
  
  Which option?
  ```
-@@ -83,51 +90,37 @@
+@@ -83,51 +90,37 @@ is theirs.
  
  ## Step 5: Execute Choice
  
@@ -156,37 +162,37 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
 -If tests fail on the merged result: stop, leave the worktree and branch in
 -place, and investigate — nothing has been pushed, so the merge is local
 -and recoverable.
+-
+-Once the merged result is green: clean up the worktree (Step 6), then
+-delete the branch:
 +`jj` rebases nothing behind your back: if the push is rejected the remote
 +moved, so `jj git fetch`, rebase the stack onto the new trunk, re-run the
 +suite, and push again. Never force-push to resolve a rejection.
  
--Once the merged result is green: clean up the worktree (Step 6), then
--delete the branch:
+-```bash
+-git branch -d <feature-branch>
+-```
+-
+-### Option 2: Push and Create PR
 +### Option 2: Push a Bookmark and Create a PR
  
  ```bash
--git branch -d <feature-branch>
+-git push -u origin <feature-branch>
+-# From a detached HEAD, name the new branch on the remote:
+-# git push origin HEAD:refs/heads/<new-branch>
 +jj bookmark set <feature-name> -r @
 +jj git push --bookmark <feature-name>
  ```
  
--### Option 2: Push and Create PR
+-Then create the pull/merge request against <base-branch> with the forge's
+-tooling — its CLI if one is available, or the creation URL most forges
+-print when you push — following the repo's PR template and conventions if
+-present, and report the URL to your human partner.
 +Then create the pull/merge request against the trunk bookmark with the
 +forge's tooling — its CLI if one is available, or the creation URL most
 +forges print when you push — following the repo's PR template and
 +conventions if present, and report the URL to your human partner.
  
--```bash
--git push -u origin <feature-branch>
--# From a detached HEAD, name the new branch on the remote:
--# git push origin HEAD:refs/heads/<new-branch>
--```
--
--Then create the pull/merge request against <base-branch> with the forge's
--tooling — its CLI if one is available, or the creation URL most forges
--print when you push — following the repo's PR template and conventions if
--present, and report the URL to your human partner.
--
 -Keep the worktree — your human partner iterates on PR feedback there.
 +The stack stays checked out: PR feedback gets fixed right here, with
 +`jj new` for follow-ups or `jj squash` to fold them into the change they
@@ -200,7 +206,7 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
  
  ### If your human partner asks to discard the work
  
-@@ -135,10 +128,8 @@
+@@ -135,10 +128,8 @@ This path exists only as a response to an explicit request to throw the
  work away. Confirm first:
  
  ```
@@ -213,15 +219,14 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
  
  Type 'discard' to confirm.
  ```
-@@ -146,56 +137,30 @@
+@@ -146,80 +137,30 @@ Type 'discard' to confirm.
  Wait for that exact confirmation. When it arrives:
  
  ```bash
 -MAIN_ROOT=$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)
 -cd "$MAIN_ROOT"
-+jj abandon <first-change>::@
- ```
- 
+-```
+-
 -Then clean up the worktree (Step 6) and force-delete the branch:
 -
 -```bash
@@ -246,6 +251,30 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
 -git worktree prune  # Self-healing: clean up any stale registrations
 -```
 -
+-**If removal is refused** (`contains modified or untracked files`): the
+-worktree holds files that exist nowhere else — uncommitted plans, notes,
+-or scratch work. Never `--force` on your own initiative. Show your human
+-partner what is at stake and ask:
+-
+-```bash
+-git -C "$WORKTREE_PATH" status --porcelain -uall
+-```
+-
++jj abandon <first-change>::@
+ ```
+-Worktree removal refused — these files were never committed:
+-
+-<file list>
+-
+-1. Commit them to <branch> before cleanup
+-2. Move them into <main repo root>
+-3. Delete them (unrecoverable)
+-
+-Which?
+-```
+-
+-Carry out the choice, then remove the worktree.
+ 
 -**Otherwise:** The host environment owns this workspace — leave it in
 -place. If your platform provides a workspace-exit tool, use it.
 +There is no workspace to tear down afterwards. The operation is recoverable
@@ -277,6 +306,7 @@ diff --git a/skills/finishing-a-development-branch/SKILL.md b/skills/finishing-a
  | "'Yeah, get rid of it' counts as confirmation" | Only the typed word `discard` authorizes deletion. |
 -| "The PR is up, so the worktree is clutter now" | PR feedback gets fixed in that worktree. It stays until the work lands. |
 -| "This other worktree looks stale — I'll clean it too" | Clean up only worktrees under `.worktrees/` or `worktrees/`. Everything else belongs to the host. |
+-| "Removal refused — `--force` is just finishing the cleanup" | The refusal means files exist only in that worktree. `--force` destroys them permanently. Show your human partner and ask. |
 -| "The merged-result failure is probably flaky" | A failing merged result stops everything. Branch and worktree stay put while you investigate. |
 -| "The base branch is obviously main" | Confirm the fork point or ask. Merging into the wrong base is expensive to undo. |
 -| "The push was rejected — force-push will fix it" | A rejected push means the remote moved. Investigate; force-push only on your human partner's explicit request. |

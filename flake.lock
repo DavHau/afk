@@ -104,10 +104,10 @@
     "superpowers": {
       "flake": false,
       "locked": {
-        "lastModified": 1785266736,
-        "narHash": "sha256-fnl+HbPL2qD5Zgz8a1NctjFJSqu6UsyHJAhQMLQNXXc=",
+        "lastModified": 1790359587,
+        "narHash": "sha256-BWPiXoXV+jePP+wn/Z+Af4iehIL7oei00plaWaTzq8s=",
         "ref": "main",
-        "rev": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+        "rev": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/obra/superpowers.git"
