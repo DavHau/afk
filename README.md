@@ -13,6 +13,7 @@ Kick off a feature, walk away, come back to reviewed, tested, landed code. afk i
 - **Strict testing & review gates** — TDD is mandatory, every task is reviewed against its spec before it may merge, every wave gets a review, and the whole branch gets a final one. No completion claims without fresh verification evidence.
 - **jj (Jujutsu) native, git compatible** — the agent drives version control through jj, colocated on top of your plain git repo: history stays ordinary git commits, collaborators and CI see a normal git repo, and you never have to touch jj yourself.
 - **direnv integration** — your project devshell is loaded automatically and stays fresh across every command the agent runs.
+- **Batteries-included Python eval** — the eval kernel falls back to a writable venv at `~/.omp/profiles/afk/python-env` built on a nix interpreter that ships the libraries agents actually reach for (polars, numpy, httpx, scipy, pandas, pyarrow, …). `%pip install` adds anything else, and manylinux wheels with native dependencies load out of the box. Project venvs still take precedence.
 
 ## The development process
 

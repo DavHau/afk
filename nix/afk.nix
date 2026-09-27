@@ -8,6 +8,10 @@
   afk-skills,
 }:
 let
+  # Base interpreter of the managed eval venv (see preHook and
+  # ./python-env.nix).
+  pythonEnv = import ./python-env.nix { inherit pkgs; };
+
   # Distribution default settings, loaded via $OMP_DISTRO_CONFIG (the
   # omp-distro-default-settings patch) as a layer BELOW the user's global
   # config.yml — users override any of this at runtime and their writes
@@ -148,6 +152,33 @@ let
       # /account: manual OAuth account switching for multi-subscription
       # providers (see omp-anthropic-weekly-reset-priority.patch).
       ln -sf ${../extensions/account.ts} "$config_dir/extensions/account.ts"
+      # Managed eval venv: omp's kernel falls back to <profile root>/python-env
+      # (~/.omp/profiles/afk/python-env; getPythonEnvDir is profile-scoped)
+      # when the project has no venv (VIRTUAL_ENV, ./.venv, ./venv still win).
+      # Nix-provided libraries via --system-site-packages, `%pip install`
+      # for the rest. Recreated when the nix interpreter changes (the
+      # marker holds its store path); pip-installed extras do not survive
+      # that. A venv without the marker is user-made and left alone.
+      # Failure only warns: afk still starts, eval falls back to PATH.
+      venv="$HOME/.omp/profiles/afk/python-env"
+      marker="$venv/.afk-python"
+      if [ ! -e "$venv" ] || { [ -e "$marker" ] && [ "$(cat "$marker")" != "${pythonEnv}" ]; }; then
+        mkdir -p "$HOME/.omp/profiles/afk"
+        # errexit is off inside an `if` condition: chain with && so a
+        # failed step skips the marker and reports.
+        if ! (
+          exec 9>"$venv.lock" &&
+            ${pkgs.util-linux}/bin/flock 9 &&
+            # Re-check under the lock: a concurrent afk may have finished it.
+            if [ "$(cat "$marker" 2>/dev/null)" != "${pythonEnv}" ]; then
+              rm -rf "$venv" &&
+                ${pythonEnv}/bin/python3 -m venv --system-site-packages "$venv" &&
+                printf '%s' "${pythonEnv}" > "$marker"
+            fi
+        ); then
+          echo "afk: warning: could not create $venv" >&2
+        fi
+      fi
     '';
   };
 in
