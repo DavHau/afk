@@ -1,0 +1,187 @@
+afk: the Python eval kernel mirrors the live host environment.
+
+Why: afk disables the bash tool, so eval is the command runner. Upstream
+spawns the kernel with an allowlisted env (PATH, HOME, LANG, ...) taken from
+getShellConfig()'s once-per-process cached snapshot. Two consequences:
+devshell variables (CC, PKG_CONFIG_PATH, NIX_CFLAGS_COMPILE, DIRENV_*,
+GIT_EDITOR=true, ...) never reach `subprocess` calls, and env changes the
+direnv extension applies to process.env mid-session never reach a retained
+kernel. Restarting the kernel would lose its state, so the env is synced
+in place instead.
+
+Mechanism: every execute payload carries `hostEnv` = procmgr.buildSpawnEnv
+(the bash child-shell env, rebuilt from live Bun.env) minus the API-key
+denylist, with the kernel's venv layout re-applied (venv bin first on
+PATH). The runner diffs it against the previous request's hostEnv and
+writes only changed keys / removes dropped keys, so variables a cell set
+itself survive until the host changes that same key. The first request
+(the kernel init script) mirrors the whole env. Managed PI_* keys stay
+owned by the per-request `env` patch.
+
+What must survive a rebase:
+- procmgr.buildSpawnEnv exported and still built from live Bun.env.
+- PythonKernel's constructor takes the hostEnv thunk; start() builds it
+  from the resolved runtime and the configured shell.
+- runner.py applies hostEnv in _apply_request_runtime BEFORE the managed
+  env patch.
+- JS eval workers are not covered (they snapshot env at worker creation).
+
+diff --git a/packages/coding-agent/src/eval/py/kernel.ts b/packages/coding-agent/src/eval/py/kernel.ts
+index a0fb33b24e..a5bcc04b08 100644
+--- a/packages/coding-agent/src/eval/py/kernel.ts
++++ b/packages/coding-agent/src/eval/py/kernel.ts
+@@ -8,7 +8,7 @@
+  * timeout.
+  */
+ import * as path from "node:path";
+-import { $flag, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
++import { $flag, isBunTestRuntime, logger, procmgr, Snowflake } from "@oh-my-pi/pi-utils";
+ import { Settings } from "../../config/settings";
+ import {
+ 	BaseKernel,
+@@ -25,6 +25,7 @@ import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
+ import {
+ 	enumeratePythonRuntimes,
+ 	filterEnv,
++	hostKernelEnv,
+ 	type PythonRuntime,
+ 	resolveExplicitPythonRuntime,
+ 	resolvePythonRuntime,
+@@ -177,7 +178,12 @@ async function probePythonKernelAvailability(
+ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
+ 	#installedPreludes = new Map<string, PythonPreludeSource>();
+ 
+-	private constructor(id: string) {
++	/**
++	 * `hostEnv` yields the live host environment for every request; the runner
++	 * applies what changed since the previous request to `os.environ`, so
++	 * mid-session host env updates (direnv reloads) reach a retained kernel.
++	 */
++	private constructor(id: string, hostEnv: () => Record<string, string>) {
+ 		super(id, {
+ 			languageName: "Python",
+ 			traceIpc: TRACE_IPC,
+@@ -191,6 +197,7 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
+ 					cwd: opts?.cwd,
+ 					filename: opts?.filename,
+ 					env: opts?.env,
++					hostEnv: hostEnv(),
+ 					silent: opts?.silent ?? false,
+ 					storeHistory: opts?.storeHistory ?? !(opts?.silent ?? false),
+ 					expectedShadowRevision: opts?.expectedShadowRevision,
+@@ -303,7 +310,11 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
+ 		spawnEnv.PYTHONIOENCODING = "utf-8";
+ 
+ 		const scriptPath = await stageRunnerScript("omp-python-runner", "py", RUNNER_SCRIPT);
+-		const kernel = new PythonKernel(Snowflake.next());
++		const hostRuntime = runtime;
++		const shell = (await Settings.init()).getShellConfig().shell;
++		const kernel = new PythonKernel(Snowflake.next(), () =>
++			hostKernelEnv(hostRuntime, procmgr.buildSpawnEnv(shell)),
++		);
+ 
+ 		const proc = Bun.spawn([runtime.pythonPath, "-u", scriptPath], {
+ 			cwd: options.cwd,
+diff --git a/packages/coding-agent/src/eval/py/runner.py b/packages/coding-agent/src/eval/py/runner.py
+index 259624aeec..fa7c738d02 100644
+--- a/packages/coding-agent/src/eval/py/runner.py
++++ b/packages/coding-agent/src/eval/py/runner.py
+@@ -5,7 +5,7 @@ wrapper writes typed frames back.
+ 
+ Host -> wrapper:
+   {"id": str, "code": str, "silent": bool?, "storeHistory": bool?}
+-  {"id": str, "code": str, "silent": bool?, "storeHistory": bool?, "cwd": str?, "filename": str?, "env": dict?}
++  {"id": str, "code": str, "silent": bool?, "storeHistory": bool?, "cwd": str?, "filename": str?, "env": dict?, "hostEnv": dict?}
+   {"type": "tool", "id": str, "op": "describe", "names": [str]}
+   {"type": "tool", "id": str, "op": "call", "name": str, "args": dict}
+   {"type": "exit"}                                # graceful shutdown
+@@ -1961,6 +1961,33 @@ _MANAGED_ENV_KEYS = (
+     "PI_EVAL_LOCAL_ROOTS",
+ )
+ 
++# afk: host environment as of the previous request's `hostEnv` (see
++# _sync_host_env). Starts empty, so the first request mirrors all of it.
++_HOST_ENV: dict = {}
++
++
++def _sync_host_env(host_env: dict) -> None:
++    """Mirror host environment changes into ``os.environ``.
++
++    Only keys whose host value changed since the previous request are written,
++    and keys the host dropped are removed, so a variable a cell set itself
++    survives until the host changes that same key. Managed keys stay owned by
++    the per-request ``env`` patch.
++    """
++    global _HOST_ENV
++    current = {
++        key: value
++        for key, value in host_env.items()
++        if isinstance(key, str) and isinstance(value, str) and key not in _MANAGED_ENV_KEYS
++    }
++    for key in _HOST_ENV.keys() - current.keys():
++        os.environ.pop(key, None)
++    for key, value in current.items():
++        if _HOST_ENV.get(key) != value:
++            os.environ[key] = value
++    _HOST_ENV = current
++
++
+ 
+ def _apply_request_runtime(req: dict) -> None:
+     cwd = req.get("cwd")
+@@ -1972,6 +1999,10 @@ def _apply_request_runtime(req: dict) -> None:
+             pass
+         sys.path.insert(0, cwd)
+ 
++    host_env = req.get("hostEnv")
++    if isinstance(host_env, dict):
++        _sync_host_env(host_env)
++
+     env = req.get("env")
+     if isinstance(env, dict):
+         for key in _MANAGED_ENV_KEYS:
+diff --git a/packages/coding-agent/src/eval/py/runtime.ts b/packages/coding-agent/src/eval/py/runtime.ts
+index 367c9444ac..b6d30e5833 100644
+--- a/packages/coding-agent/src/eval/py/runtime.ts
++++ b/packages/coding-agent/src/eval/py/runtime.ts
+@@ -183,6 +183,23 @@ function venvBinDir(venvPath: string): string {
+ 	return process.platform === "win32" ? path.join(venvPath, "Scripts") : path.join(venvPath, "bin");
+ }
+ 
++/**
++ * afk: the environment a live Python kernel mirrors from its host — the
++ * child-shell env the bash tool would get (`shellEnv`, built from live
++ * `process.env`), minus the API-key denylist, with the kernel's venv layout
++ * re-applied so PATH keeps the venv bin first. Unlike {@link filterEnv} there is
++ * no allowlist: with eval as the only command runner, devshell variables
++ * (CC, PKG_CONFIG_PATH, NIX_*, …) must reach `subprocess` calls.
++ */
++export function hostKernelEnv(runtime: PythonRuntime, shellEnv: Record<string, string>): Record<string, string> {
++	const base: Record<string, string> = {};
++	for (const [key, value] of Object.entries(shellEnv)) {
++		if (!NORMALIZED_DENYLIST.has(normalizeEnvKey(key))) base[key] = value;
++	}
++	if (!runtime.venvPath) return base;
++	return applyVenvEnv(base, runtime.venvPath, venvBinDir(runtime.venvPath)) as Record<string, string>;
++}
++
+ function detectExplicitVenv(pythonPath: string): { venvPath: string; binDir: string } | undefined {
+ 	const binDir = path.dirname(pythonPath);
+ 	const venvPath = path.dirname(binDir);
+diff --git a/packages/utils/src/procmgr.ts b/packages/utils/src/procmgr.ts
+index 7527d4cfd1..7bb99ba554 100644
+--- a/packages/utils/src/procmgr.ts
++++ b/packages/utils/src/procmgr.ts
+@@ -23,9 +23,10 @@ export interface ShellConfigOptions {
+ let cachedShellConfig: ShellConfig | null = null;
+ 
+ /**
+- * Build the spawn environment (cached).
++ * Build the spawn environment from live `Bun.env`. `getShellConfig` caches
++ * one result; afk's eval kernel env sync calls this directly per request.
+  */
+-function buildSpawnEnv(shell: string): Record<string, string> {
++export function buildSpawnEnv(shell: string): Record<string, string> {
+ 	const noCI = $env.PI_BASH_NO_CI || $env.CLAUDE_BASH_NO_CI;
+ 	return {
+ 		...filterChildShellEnv(Bun.env),

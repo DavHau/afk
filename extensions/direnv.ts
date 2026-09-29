@@ -3,17 +3,16 @@
  *
  * Port of Mic92's pi direnv extension (Mic92/dotfiles,
  * home/.pi/agent/extensions/direnv.ts): runs `direnv export json` on
- * session start and after every bash command, applying the env diff to
- * `process.env`. Commands then run inside the devshell with no
+ * session start and after every bash and eval call, applying the env diff
+ * to `process.env`. Commands then run inside the devshell with no
  * `nix develop -c` prefix and no per-command flake re-eval — pair with
  * nix-direnv so the export is a cache read (milliseconds).
  *
- * omp caveat vs pi: omp caches a persistent native shell per session,
- * spawned lazily on the FIRST bash call — it inherits the env applied at
- * session_start, but a mid-session .envrc change only reaches newly
- * spawned processes (eval kernels, subagents, replacement shells), not
- * the already-running cached shell. Accepted; matches the original's
- * process.env-mutation design.
+ * Where the env lands: the Python eval kernel mirrors live `process.env`
+ * on every cell (omp-eval-host-env-sync patch), so a reload reaches the
+ * retained kernel on its next cell. omp's persistent native bash shell
+ * (bash is off by default in afk) and JS eval workers snapshot the env
+ * when spawned and keep the old one.
  *
  * Auto-allow: direnv keys its grants on the .envrc path + content +
  * grant-store location (~/.local/share/direnv/allow). Three agent
@@ -194,7 +193,7 @@ export function isEnvrcMutation(event: { toolName?: string; input?: Record<strin
 	return typeof target === "string" && path.basename(target) === ".envrc";
 }
 
-/** Wire the loader to session_start, bash, and .envrc edit/write tool results. */
+/** Wire the loader to session_start, bash/eval, and .envrc edit/write tool results. */
 export function createDirenvExtension(pi: DirenvPi, deps: DirenvLoaderDeps): void {
 	const loader = createDirenvLoader(deps);
 
@@ -205,12 +204,14 @@ export function createDirenvExtension(pi: DirenvPi, deps: DirenvLoaderDeps): voi
 
 	pi.on("session_start", (_event, ctx) => loader.load(ctx.cwd, statusFor(ctx)));
 
-	// Re-run after every bash command to pick up .envrc changes
-	// (cd to a new dir, git checkout, direnv allow, ...), and after
-	// edit/write tool calls that touched a .envrc directly — the usual
-	// way an agent (especially an isolated subagent) modifies it.
+	// Re-run after every command-running call to pick up .envrc changes
+	// (git checkout, direnv allow, ...) — bash, or eval now that afk runs
+	// commands from the Python kernel — and after edit/write tool calls that
+	// touched a .envrc directly, the usual way an agent (especially an
+	// isolated subagent) modifies it.
 	pi.on("tool_result", (event, ctx) => {
-		if (event.toolName !== "bash" && !isEnvrcMutation(event)) return;
+		const runsCommands = event.toolName === "bash" || event.toolName === "eval";
+		if (!runsCommands && !isEnvrcMutation(event)) return;
 		return loader.load(ctx.cwd, statusFor(ctx));
 	});
 }

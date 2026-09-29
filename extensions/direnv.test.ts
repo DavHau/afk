@@ -295,7 +295,7 @@ describe("createDirenvExtension", () => {
 		expect(env.FOO).toBe("bar");
 	});
 
-	it("ignores tool_result events for non-bash tools and edits of other files", async () => {
+	it("ignores tool_result events for non-command tools and edits of other files", async () => {
 		const { pi, events } = makePi();
 		const calls: string[] = [];
 		createDirenvExtension(pi, {
@@ -328,7 +328,7 @@ describe("createDirenvExtension", () => {
 		expect(calls).toEqual(["/proj", "/proj"]);
 	});
 
-	it("reloads direnv after a bash tool_result", async () => {
+	it("reloads direnv after bash and eval tool_results", async () => {
 		const { pi, events } = makePi();
 		const calls: string[] = [];
 		createDirenvExtension(pi, {
@@ -340,8 +340,8 @@ describe("createDirenvExtension", () => {
 		});
 		const { ctx } = makeCtx();
 		await emit(events, "tool_result", { toolName: "bash" }, ctx);
-		await Bun.sleep(0);
-		expect(calls).toEqual(["/proj"]);
+		await emit(events, "tool_result", { toolName: "eval" }, ctx);
+		expect(calls).toEqual(["/proj", "/proj"]);
 	});
 
 	it("renders themed status: loading while running, then clears on success", async () => {

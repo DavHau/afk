@@ -80,10 +80,23 @@ let
         merge: branch
         apply: false
     bash:
+      # Python-first distribution: no bash tool. Commands run from eval
+      # (`subprocess.run`, `!cmd`) or `hub start`; the Python kernel carries
+      # the full devshell environment and follows direnv refreshes
+      # (omp-eval-host-env-sync patch). Users re-enable it in their own
+      # config.yml.
+      enabled: false
       autoBackground:
         # Auto-convert any non-PTY command still running after 10s into a
         # background job. In-process, so it works inside the
-        # isolation/sandbox mounts.
+        # isolation/sandbox mounts. Kept for users who re-enable bash.
+        enabled: true
+        thresholdMs: 10000
+    eval:
+      autoBackground:
+        # Same 10s cutoff as bash had: with no bash tool, long builds and
+        # test runs happen in eval cells, and a cell blocking the turn for
+        # the default 60s (off by default) stalls the whole agent.
         enabled: true
         thresholdMs: 10000
     async:
@@ -139,6 +152,8 @@ let
       ln -sf ${../profile/rules/afk-devshells.md} "$config_dir/rules/afk-devshells.md"
       ln -sf ${../profile/rules/afk-unavailable-programs.md} "$config_dir/rules/afk-unavailable-programs.md"
       ln -sf ${../profile/rules/afk-nix-store.md} "$config_dir/rules/afk-nix-store.md"
+      # Python-first command running: bash is disabled in the distro config.
+      ln -sf ${../profile/rules/afk-running-commands.md} "$config_dir/rules/afk-running-commands.md"
       # Read dependency sources out of ~/projects instead of guessing.
       ln -sf ${../profile/rules/afk-dependency-sources.md} "$config_dir/rules/afk-dependency-sources.md"
       # The superpowers bootstrap injector — skills never fire without it.

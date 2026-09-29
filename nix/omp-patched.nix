@@ -124,6 +124,11 @@
 #   so the TUI shows which account a multi-subscription session is billed
 #   against; a one-shot startup getApiKey warmup attributes the session so
 #   the email appears at launch instead of at the first prompt.
+# - omp-eval-host-env-sync: the Python eval kernel mirrors the live host
+#   env (bash child-shell env minus the API-key denylist, venv bin first on
+#   PATH) on every request, diffed runner-side so cell-set variables
+#   survive. afk disables bash; without this, devshell variables never
+#   reach `subprocess` calls and direnv reloads never reach the kernel.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -168,6 +173,7 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-goal-no-pause-on-interrupt.patch
     ../patches/omp/omp-anthropic-weekly-reset-priority.patch
     ../patches/omp/omp-statusline-anthropic-account.patch
+    ../patches/omp/omp-eval-host-env-sync.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
   # The pi-natives Rust addon is built once, from upstream source plus the
