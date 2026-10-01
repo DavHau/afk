@@ -116,9 +116,13 @@
 #   deterministic ranking (session-hash + orderPos tiebreak) made the old
 #   weighted-sampling test expectations obsolete. 18.x absorbed the old
 #   pinSessionCredential() API as upstream pinSessionOAuthAccount (wired to
-#   /account); the patch now only folds the remaining delta into it —
-#   clearing the pinned credential's reactive rate-limit blocks on fresh
-#   manual pins (persisted-session restores keep their blocks).
+#   `/session pin`); the patch folds the remaining delta into it — clearing
+#   the pinned credential's reactive rate-limit blocks on fresh manual pins
+#   (persisted-session restores keep their blocks). It also re-ranks under a
+#   warm session pin (upstream skips ranking for an hour after each use, so
+#   a busy session never noticed a sibling's weekly window rolling over
+#   first); the pin only moves when the reset order changed, and fresh
+#   manual pins are exempt.
 # - omp-statusline-anthropic-account: the cost segment appends the
 #   session-sticky Anthropic OAuth account email (dimmed, 40-col truncated)
 #   so the TUI shows which account a multi-subscription session is billed

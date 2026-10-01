@@ -164,9 +164,12 @@ let
       # builds in the original checkout via absolute paths (isolation is a
       # snapshot, not a jail).
       ln -sf ${../extensions/isolation-guard.ts} "$config_dir/extensions/isolation-guard.ts"
-      # /account: manual OAuth account switching for multi-subscription
-      # providers (see omp-anthropic-weekly-reset-priority.patch).
-      ln -sf ${../extensions/account.ts} "$config_dir/extensions/account.ts"
+      # Migration: the /account extension was dropped once omp shipped
+      # `/session pin` over the same pinSessionOAuthAccount API; remove the
+      # dangling symlink earlier afk versions left behind.
+      if [ -L "$config_dir/extensions/account.ts" ]; then
+        rm "$config_dir/extensions/account.ts"
+      fi
       # Managed eval venv: omp's kernel falls back to <profile root>/python-env
       # (~/.omp/profiles/afk/python-env; getPythonEnvDir is profile-scoped)
       # when the project has no venv (VIRTUAL_ENV, ./.venv, ./venv still win).
