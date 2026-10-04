@@ -3,7 +3,9 @@
  *
  * Port of Mic92's pi direnv extension (Mic92/dotfiles,
  * home/.pi/agent/extensions/direnv.ts): runs `direnv export json` on
- * session start and after every bash and eval call, applying the env diff
+ * session start (in the background: the session is usable at once, and
+ * the first bash/eval call waits for that load) and after every bash and
+ * eval call, applying the env diff
  * to `process.env`. Commands then run inside the devshell with no
  * `nix develop -c` prefix and no per-command flake re-eval — pair with
  * nix-direnv so the export is a cache read (milliseconds).
@@ -83,6 +85,7 @@ export interface DirenvCtx {
 /** Structural subset of ExtensionAPI, for tests. */
 export interface DirenvPi {
 	on(event: "session_start", handler: (event: unknown, ctx: DirenvCtx) => void | Promise<void>): void;
+	on(event: "tool_call", handler: (event: { toolName?: string }, ctx: DirenvCtx) => void | Promise<void>): void;
 	on(
 		event: "tool_result",
 		handler: (
@@ -132,6 +135,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  * Serialized direnv loader: one run in flight at a time (later loads
  * queue behind it), each load blocks callers for at most `timeoutMs` —
  * a slower run completes in the background and still applies its result.
+ * `settle()` waits, under the same budget, for whatever is queued.
  */
 export function createDirenvLoader(deps: DirenvLoaderDeps) {
 	const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -161,17 +165,19 @@ export function createDirenvLoader(deps: DirenvLoaderDeps) {
 		onStatus?.(applied.ok ? "ok" : "error");
 	}
 
-	function load(cwd: string, onStatus?: (state: DirenvState) => void): Promise<void> {
-		onStatus?.("loading");
-		const work = tail.then(() => runAndApply(cwd, onStatus));
-		tail = work;
-
+	function settle(): Promise<void> {
 		const { promise: budget, resolve: expire } = Promise.withResolvers<void>();
 		const timer = setTimeout(expire, timeoutMs);
-		return Promise.race([work, budget]).finally(() => clearTimeout(timer));
+		return Promise.race([tail, budget]).finally(() => clearTimeout(timer));
 	}
 
-	return { load };
+	function load(cwd: string, onStatus?: (state: DirenvState) => void): Promise<void> {
+		onStatus?.("loading");
+		tail = tail.then(() => runAndApply(cwd, onStatus));
+		return settle();
+	}
+
+	return { load, settle };
 }
 
 function themedStatus(ctx: DirenvCtx, state: DirenvState): string | undefined {
@@ -202,7 +208,17 @@ export function createDirenvExtension(pi: DirenvPi, deps: DirenvLoaderDeps): voi
 			? (state: DirenvState) => ctx.ui.setStatus("direnv", themedStatus(ctx, state))
 			: undefined;
 
-	pi.on("session_start", (_event, ctx) => loader.load(ctx.cwd, statusFor(ctx)));
+	// Not awaited: omp awaits session_start handlers before the session (and
+	// every subagent) becomes usable, and a cold nix-direnv evaluation can
+	// take seconds. Commands are what need the env, so bash/eval calls wait
+	// for the queued load instead (tool_call below).
+	pi.on("session_start", (_event, ctx) => {
+		void loader.load(ctx.cwd, statusFor(ctx));
+	});
+
+	pi.on("tool_call", event => {
+		if (event.toolName === "bash" || event.toolName === "eval") return loader.settle();
+	});
 
 	// Re-run after every command-running call to pick up .envrc changes
 	// (git checkout, direnv allow, ...) — bash, or eval now that afk runs

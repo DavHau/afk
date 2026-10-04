@@ -24,6 +24,9 @@ let
       # Skip the onboarding setup wizard by default; the distribution
       # pre-configures everything the wizard would ask about.
       setupWizard: false
+      # afk pins its omp build through nix; upstream's "new version"
+      # check can only nag about releases the distro has not adopted.
+      checkUpdate: false
     modelRoles:
       # Distribution default model. Users override this in their own
       # config.yml, which layers above this.

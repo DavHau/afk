@@ -71,6 +71,18 @@ async function emit(
 }
 
 /**
+ * session_start loads in the background; the session's first command
+ * (a bash/eval tool_call) is what waits for that load.
+ */
+async function startSession(
+	events: Map<string, Array<(event: unknown, ctx: FakeCtx) => void | Promise<void>>>,
+	ctx: FakeCtx,
+) {
+	await emit(events, "session_start", {}, ctx);
+	await emit(events, "tool_call", { toolName: "eval" }, ctx);
+}
+
+/**
  * Extension instance wired to the REAL direnv binary, with the export
  * applied to a private target object instead of process.env so each test
  * asserts exactly what a load produced.
@@ -148,7 +160,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		const { ctx, statusLog } = makeCtx(proj);
 
 		expect(grantFiles()).toHaveLength(0); // fresh store = sandboxed-session state
-		await emit(events, "session_start", {}, ctx);
+		await startSession(events, ctx);
 
 		expect(env.AFK_ITEST).toBe("main");
 		expect(env.AFK_OTHER).toBe("1");
@@ -163,7 +175,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		const proj = makeProject("edit", "export AFK_ITEST=before\n");
 		const { env, events } = makeRealExtension();
 		const { ctx } = makeCtx(proj);
-		await emit(events, "session_start", {}, ctx);
+		await startSession(events, ctx);
 		expect(env.AFK_ITEST).toBe("before");
 
 		// Content change invalidates the grant (direnv hashes path+content).
@@ -176,7 +188,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		const proj = makeProject("bash", "export AFK_ITEST=v1\n");
 		const { env, events } = makeRealExtension();
 		const { ctx } = makeCtx(proj);
-		await emit(events, "session_start", {}, ctx);
+		await startSession(events, ctx);
 		expect(env.AFK_ITEST).toBe("v1");
 
 		fs.writeFileSync(path.join(proj, ".envrc"), "export AFK_ITEST=v2\n");
@@ -189,7 +201,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		const origin = makeProject("origin", "export AFK_ITEST=devshell\n");
 		const main = makeRealExtension();
 		const mainCtx = makeCtx(origin);
-		await emit(main.events, "session_start", {}, mainCtx.ctx);
+		await startSession(main.events, mainCtx.ctx);
 		expect(main.env.AFK_ITEST).toBe("devshell");
 
 		// Task-isolation clone: same content, different path (t<9hex>/m
@@ -202,7 +214,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		// The subagent session runs the same extension with cwd = clone.
 		const sub = makeRealExtension();
 		const subCtx = makeCtx(clone);
-		await emit(sub.events, "session_start", {}, subCtx.ctx);
+		await startSession(sub.events, subCtx.ctx);
 		expect(sub.env.AFK_ITEST).toBe("devshell");
 		expect(subCtx.statusLog.at(-1)).toEqual(["direnv", undefined]);
 
@@ -222,7 +234,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		const proj = makeProject("broken", "this-command-does-not-exist-afk\nexit 1\n");
 		const { env, events } = makeRealExtension();
 		const { ctx, statusLog } = makeCtx(proj);
-		await emit(events, "session_start", {}, ctx);
+		await startSession(events, ctx);
 		expect(statusLog.at(-1)).toEqual(["direnv", "[error]direnv ✗"]);
 		expect(env.AFK_ITEST).toBeUndefined();
 	});
@@ -232,7 +244,7 @@ describe.skipIf(!hasDirenv)("direnv integration (real binary)", () => {
 		fs.mkdirSync(dir, { recursive: true });
 		const { env, events } = makeRealExtension();
 		const { ctx, statusLog } = makeCtx(dir);
-		await emit(events, "session_start", {}, ctx);
+		await startSession(events, ctx);
 		expect(statusLog.at(-1)).toEqual(["direnv", undefined]);
 		expect(Object.keys(env)).toHaveLength(0);
 	});

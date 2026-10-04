@@ -295,6 +295,27 @@ describe("createDirenvExtension", () => {
 		expect(env.FOO).toBe("bar");
 	});
 
+	it("does not block session_start; the first bash/eval call waits for the load", async () => {
+		const { pi, events } = makePi();
+		const gate = Promise.withResolvers<DirenvRunResult>();
+		const env: Record<string, string | undefined> = {};
+		createDirenvExtension(pi, { env, run: () => gate.promise });
+		const { ctx } = makeCtx();
+		await emit(events, "session_start", {}, ctx); // returns while direnv still runs
+
+		await emit(events, "tool_call", { toolName: "read" }, ctx); // non-command tools never wait
+		let commandReleased = false;
+		const command = emit(events, "tool_call", { toolName: "eval" }, ctx).then(() => {
+			commandReleased = true;
+		});
+		await Bun.sleep(0);
+		expect(commandReleased).toBe(false);
+
+		gate.resolve({ code: 0, stdout: JSON.stringify({ FOO: "bar" }) });
+		await command;
+		expect(env.FOO).toBe("bar");
+	});
+
 	it("ignores tool_result events for non-command tools and edits of other files", async () => {
 		const { pi, events } = makePi();
 		const calls: string[] = [];
