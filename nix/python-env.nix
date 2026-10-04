@@ -31,10 +31,21 @@ let
     fontconfig
     freetype
   ];
+
+  # afk's own helper module (`from afk_run import run`): subprocess with a
+  # process-group kill on timeout/interrupt. See profile/python/afk_run.py.
+  afkRun =
+    ps:
+    ps.toPythonModule (
+      pkgs.runCommand "afk-run" { } ''
+        install -Dm444 ${../profile/python/afk_run.py} $out/${ps.python.sitePackages}/afk_run.py
+      ''
+    );
 in
 (pkgs.python3.withPackages (
   ps: with ps; [
     pip
+    (afkRun ps)
     # The libraries afk sessions reach for in eval cells, most used first
     # (import and ModuleNotFoundError counts across the afk session
     # transcripts, 2026-09).

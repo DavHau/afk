@@ -1,0 +1,26 @@
+afk: eval cells default to a 300 s deadline, the same as bash.
+
+Why: afk disables the bash tool, so eval is the command runner. Upstream
+gives bash a 300 s default but eval only 30 s; removing bash silently cut
+the default command deadline from 5 minutes to 30 seconds. ssh/network
+commands routinely exceed 30 s, and a timed-out cell whose kernel does not
+answer the interrupt gets the whole kernel killed (observed 2026-10-04 nmm
+session: rec 4980, then cascading kernel deaths).
+
+What must survive a rebase:
+- TOOL_TIMEOUTS.eval.default is 300 (min/max unchanged). Explicit
+  `timeout` values and `timeout: 0` behave as upstream.
+
+diff --git a/packages/coding-agent/src/tools/tool-timeouts.ts b/packages/coding-agent/src/tools/tool-timeouts.ts
+index 3f97133..36f94fa 100644
+--- a/packages/coding-agent/src/tools/tool-timeouts.ts
++++ b/packages/coding-agent/src/tools/tool-timeouts.ts
+@@ -9,7 +9,7 @@ export interface ToolTimeoutConfig {
+ 
+ export const TOOL_TIMEOUTS = {
+ 	bash: { default: 300, min: 1, max: 3600 },
+-	eval: { default: 30, min: 1, max: 3600 },
++	eval: { default: 300, min: 1, max: 3600 },
+ 	browser: { default: 30, min: 1, max: 300 },
+ 	computer: { default: 120, min: 1, max: 300 },
+ 	ssh: { default: 60, min: 1, max: 3600 },

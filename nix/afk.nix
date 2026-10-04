@@ -81,7 +81,7 @@ let
         apply: false
     bash:
       # Python-first distribution: no bash tool. Commands run from eval
-      # (`subprocess.run`, `!cmd`) or `hub start`; the Python kernel carries
+      # (`afk_run.run`, `!cmd`) or `hub start`; the Python kernel carries
       # the full devshell environment and follows direnv refreshes
       # (omp-eval-host-env-sync patch). Users re-enable it in their own
       # config.yml.

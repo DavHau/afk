@@ -1,0 +1,398 @@
+afk: named eval kernels run in parallel; one cell per kernel at a time.
+
+Why: one eval call at a time per agent was the only way to use the kernel.
+A cell auto-backgrounded after 10 s keeps running, and the next call on the
+same kernel queued behind it inside the runner while its own timeout was
+already ticking; when that timeout fired, the process-wide SIGINT landed in
+the OTHER (running) cell, and an unresponsive cell got the kernel killed
+(2026-10-04 nmm session: a `time.sleep(720)` cell followed by status checks).
+
+What it does:
+- eval gains an optional `kernel` param (1-32 of [A-Za-z0-9_-]). A name
+  selects its own retained Python/JS kernel (session id suffix
+  `:kernel=<name>`), with its own state and process; omitted = the default
+  kernel, unchanged.
+- The tool's concurrency is per call: named-kernel calls are "shared" (run
+  alongside each other in one turn), default-kernel calls stay "exclusive".
+- A host-side lane per (backend, cwd, kernel session id) runs one cell at a
+  time and arms the cell's timeout only once it holds the lane, so waiting
+  never counts against a cell and its timeout can never interrupt another
+  cell. A caller abort while waiting just drops out of the queue.
+- Named-kernel calls skip speculative shadow execution.
+- eval.md documents kernels and the one-cell-per-kernel rule.
+
+What must survive a rebase:
+- backend.execute receives `kernel`; resolvePythonKernelIdentity /
+  resolveJsKernelIdentity take an optional kernel and suffix the session
+  id via namedKernelSessionId(). Kernel-defined tools (task/eval-tools.ts)
+  still resolve the default kernel.
+- acquireKernelLane wraps exactly backend.execute; idle timer created after.
+- test/tools/eval-named-kernels.test.ts: the lane test fails without the
+  lane (first cell gets KeyboardInterrupt).
+
+diff --git a/packages/coding-agent/src/eval/backend.ts b/packages/coding-agent/src/eval/backend.ts
+index 2fadc73..03b6543 100644
+--- a/packages/coding-agent/src/eval/backend.ts
++++ b/packages/coding-agent/src/eval/backend.ts
+@@ -23,6 +23,8 @@ export interface ExecutorBackendExecOptions {
+ 	 */
+ 	idleTimeoutMs?: number;
+ 	reset: boolean;
++	/** Named kernel (eval tool `kernel` param); undefined runs on the session's default kernel. */
++	kernel?: string;
+ 	/** Absolute filename for file-backed cells; preserves import and traceback locations. */
+ 	filename?: string;
+ 	/** Explicit distribution requirements installed before executing the cell. */
+diff --git a/packages/coding-agent/src/eval/js/index.ts b/packages/coding-agent/src/eval/js/index.ts
+index 9d36af1..592c6a2 100644
+--- a/packages/coding-agent/src/eval/js/index.ts
++++ b/packages/coding-agent/src/eval/js/index.ts
+@@ -6,7 +6,7 @@ import {
+ 	resolveEvalUrlRoots,
+ } from "../backend";
+ import { namespaceSessionId as sharedNamespace, toExecutorBackendResult } from "../backend-helpers";
+-import { defaultEvalSessionId } from "../session-id";
++import { defaultEvalSessionId, namedKernelSessionId } from "../session-id";
+ import { executeJs } from "./executor";
+ 
+ const JS_SESSION_PREFIX = "js:";
+@@ -15,13 +15,18 @@ export function namespaceSessionId(sessionId: string): string {
+ 	return sharedNamespace(sessionId, JS_SESSION_PREFIX);
+ }
+ 
+-/** Resolve the retained JavaScript kernel identity owned by a tool session. */
+-export function resolveJsKernelIdentity(session: ToolSession): {
++/** Resolve the retained JavaScript kernel identity owned by a tool session (default or named kernel). */
++export function resolveJsKernelIdentity(
++	session: ToolSession,
++	kernel?: string,
++): {
+ 	sessionKey: string;
+ 	ownerId: string | undefined;
+ } {
+ 	return {
+-		sessionKey: namespaceSessionId(session.getEvalSessionId?.() ?? defaultEvalSessionId(session)),
++		sessionKey: namespaceSessionId(
++			namedKernelSessionId(session.getEvalSessionId?.() ?? defaultEvalSessionId(session), kernel),
++		),
+ 		ownerId: session.getEvalKernelOwnerId?.() ?? undefined,
+ 	};
+ }
+@@ -36,7 +41,7 @@ export default {
+ 	},
+ 
+ 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {
+-		const identity = resolveJsKernelIdentity(opts.session);
++		const identity = resolveJsKernelIdentity(opts.session, opts.kernel);
+ 		const result = await executeJs(code, {
+ 			cwd: opts.cwd,
+ 			idleTimeoutMs: opts.idleTimeoutMs,
+diff --git a/packages/coding-agent/src/eval/py/index.ts b/packages/coding-agent/src/eval/py/index.ts
+index ec0e568..1155796 100644
+--- a/packages/coding-agent/src/eval/py/index.ts
++++ b/packages/coding-agent/src/eval/py/index.ts
+@@ -12,7 +12,7 @@ import {
+ 	toExecutorBackendResult,
+ } from "../backend-helpers";
+ import type { BackendProbeOptions } from "../probe";
+-import { defaultEvalSessionId } from "../session-id";
++import { defaultEvalSessionId, namedKernelSessionId } from "../session-id";
+ import { executePython, type PythonExecutorOptions } from "./executor";
+ import { checkPythonKernelAvailability } from "./kernel";
+ 
+@@ -26,8 +26,11 @@ function readInterpreterSetting(session: ToolSession): string | undefined {
+ 	return sharedReadInterpreterSetting(session, "python.interpreter");
+ }
+ 
+-/** Resolve the retained Python kernel identity owned by a tool session. */
+-export function resolvePythonKernelIdentity(session: ToolSession): {
++/** Resolve the retained Python kernel identity owned by a tool session (default or named kernel). */
++export function resolvePythonKernelIdentity(
++	session: ToolSession,
++	kernel?: string,
++): {
+ 	cwd: string;
+ 	sessionId: string;
+ 	interpreter: string | undefined;
+@@ -35,7 +38,9 @@ export function resolvePythonKernelIdentity(session: ToolSession): {
+ } {
+ 	return {
+ 		cwd: session.cwd,
+-		sessionId: namespaceSessionId(session.getEvalSessionId?.() ?? defaultEvalSessionId(session)),
++		sessionId: namespaceSessionId(
++			namedKernelSessionId(session.getEvalSessionId?.() ?? defaultEvalSessionId(session), kernel),
++		),
+ 		interpreter: readInterpreterSetting(session),
+ 		kernelOwnerId: session.getEvalKernelOwnerId?.() ?? undefined,
+ 	};
+@@ -53,7 +58,7 @@ export default {
+ 
+ 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {
+ 		const kernelMode = readSetting<PythonExecutorOptions["kernelMode"]>(opts.session, "python.kernelMode");
+-		const identity = resolvePythonKernelIdentity(opts.session);
++		const identity = resolvePythonKernelIdentity(opts.session, opts.kernel);
+ 		const executorOptions: PythonExecutorOptions = {
+ 			cwd: identity.cwd,
+ 			filename: opts.filename,
+diff --git a/packages/coding-agent/src/eval/session-id.ts b/packages/coding-agent/src/eval/session-id.ts
+index d339b6a..1d49d45 100644
+--- a/packages/coding-agent/src/eval/session-id.ts
++++ b/packages/coding-agent/src/eval/session-id.ts
+@@ -6,3 +6,15 @@ export function defaultEvalSessionId(session: EvalSessionSource): string {
+ 	const sessionFile = session.getSessionFile?.() ?? undefined;
+ 	return sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
+ }
++
++/** Valid `kernel` names for the eval tool: short, path- and key-safe. */
++export const EVAL_KERNEL_NAME = /^[A-Za-z0-9_-]{1,32}$/;
++
++/**
++ * Session id of a named eval kernel. Each name gets its own retained kernel
++ * (own process, own state) next to the session's default one; `undefined`
++ * selects the default kernel.
++ */
++export function namedKernelSessionId(sessionId: string, kernel: string | undefined): string {
++	return kernel ? `${sessionId}:kernel=${kernel}` : sessionId;
++}
+diff --git a/packages/coding-agent/src/prompts/tools/eval.md b/packages/coding-agent/src/prompts/tools/eval.md
+index 7bf50ec..a60f722 100644
+--- a/packages/coding-agent/src/prompts/tools/eval.md
++++ b/packages/coding-agent/src/prompts/tools/eval.md
+@@ -1,4 +1,5 @@
+ Run one step of code in a persistent kernel. State persists across your calls; `task` subagents{{#if spawns}} and eval `agent()` children{{/if}} get their own kernels.
++One cell runs per kernel at a time; a call on a busy kernel waits (its `timeout` starts once it runs). `kernel: "<name>"` selects a separate named kernel with its own state; calls on different kernels run in parallel. Long or blocking work (remote jobs, servers, waits) → its own named kernel, so your main kernel stays free.
+ 
+ Work incrementally: imports → define → test → use, each its own cell. Re-run setup ONLY after `reset`, kernel crash.
+ {{#if spawns}}{{#if eagerDelegation}}Two or more independent items → named `workpool()` + `.push(…)`; poll outside eval with `hub wait` on the pool name. Handles + `wait()` are for dependency-coupled results.{{/if}}{{/if}}
+diff --git a/packages/coding-agent/src/tools/eval.ts b/packages/coding-agent/src/tools/eval.ts
+index 960b797..b9a9291 100644
+--- a/packages/coding-agent/src/tools/eval.ts
++++ b/packages/coding-agent/src/tools/eval.ts
+@@ -18,7 +18,7 @@ import { IdleTimeout } from "../eval/idle-timeout";
+ import { getEnabledEvalPreludes } from "../eval/preludes";
+ import { prepareEvalSource } from "../eval/input";
+ import type { BackendProbeOptions } from "../eval/probe";
+-import { defaultEvalSessionId } from "../eval/session-id";
++import { defaultEvalSessionId, EVAL_KERNEL_NAME, namedKernelSessionId } from "../eval/session-id";
+ import { EvalShadowCellSession } from "../eval/speculation/cell-session";
+ import { runWithEvalShadowCell } from "../eval/speculation/runtime-context";
+ import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "@oh-my-pi/pi-tui/tools/eval";
+@@ -92,6 +92,9 @@ const evalCellCommonFields = {
+ 	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
+ 	"timeout?": type("number").describe("timeout for this eval call in seconds; 0 disables the cell timeout"),
+ 	"reset?": type("boolean").describe("wipe this language's kernel before running. Other languages are untouched."),
++	"kernel?": type("string").describe(
++		"named kernel with its own state; calls on different kernels run in parallel. Omit for your main kernel.",
++	),
+ };
+ 
+ /**
+@@ -136,6 +139,44 @@ const DISPLAY_ELISION_RESERVE_BYTES = 64;
+ /** Minimum spacing between live eval updates; bursts coalesce to one trailing snapshot. */
+ const LIVE_UPDATE_INTERVAL_MS = 50;
+ 
++/**
++ * One cell at a time per kernel, queued host-side. A cell starts its timeout
++ * only once it holds its kernel's lane, so time spent behind a running cell
++ * never counts against it, and its timeout can never interrupt that other cell
++ * (the kernel interrupt is process-wide). Calls on different kernels never
++ * contend. Keyed by backend + cwd + kernel session id.
++ */
++const kernelLanes = new Map<string, Promise<void>>();
++
++async function acquireKernelLane(key: string, signal: AbortSignal | undefined): Promise<() => void> {
++	const previous = kernelLanes.get(key) ?? Promise.resolve();
++	const { promise: held, resolve: release } = Promise.withResolvers<void>();
++	const tail = previous.then(() => held);
++	kernelLanes.set(key, tail);
++	void tail.then(() => {
++		if (kernelLanes.get(key) === tail) kernelLanes.delete(key);
++	});
++	if (signal) {
++		const aborted = Promise.withResolvers<never>();
++		const onAbort = () => aborted.reject(new ToolError("eval cancelled while waiting for its kernel"));
++		if (signal.aborted) onAbort();
++		else signal.addEventListener("abort", onAbort, { once: true });
++		try {
++			await Promise.race([previous, aborted.promise]);
++		} catch (err) {
++			// Keep the chain intact: our slot passes straight through once the
++			// cell ahead of us finishes.
++			release();
++			throw err;
++		} finally {
++			signal.removeEventListener("abort", onAbort);
++		}
++	} else {
++		await previous;
++	}
++	return release;
++}
++
+ interface FormattedDisplayJson {
+ 	fullText: string;
+ 	previewText: string;
+@@ -242,6 +283,7 @@ interface ResolvedEvalCell {
+ 	environment?: "managed" | "project";
+ 	timeoutMs: number;
+ 	reset: boolean;
++	kernel?: string;
+ 	resolved: ResolvedBackend;
+ }
+ 
+@@ -421,7 +463,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 		}
+ 		return this.#cachedParams ?? evalSchema;
+ 	}
+-	readonly concurrency = "exclusive";
++	/** Named-kernel calls run alongside each other; default-kernel calls keep the turn to themselves. */
++	readonly concurrency = (args: Partial<typeof evalSchema.infer>): "shared" | "exclusive" =>
++		typeof args.kernel === "string" && args.kernel.length > 0 ? "shared" : "exclusive";
+ 	readonly strict = true;
+ 	readonly intent = (args: Partial<typeof evalSchema.infer>): string | undefined => {
+ 		const title = typeof args.title === "string" ? args.title : undefined;
+@@ -492,6 +536,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 		const session = this.session;
+ 		const excludeWebP = webpExclusionForModel(session.getActiveModel?.());
+ 
++		const kernel = params.kernel || undefined;
++		if (kernel !== undefined && !EVAL_KERNEL_NAME.test(kernel)) {
++			throw new ToolError(`Invalid kernel name ${JSON.stringify(kernel)}: use 1-32 of [A-Za-z0-9_-].`);
++		}
+ 		const cellLanguage: EvalLanguage = params.language === "py" ? "python" : "js";
+ 		// Bound backend discovery by the eval cell's own timeout and abort signal:
+ 		// the cell IdleTimeout is armed only later in #runCells, so a hung runtime
+@@ -502,8 +550,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 				: clampTimeout("eval", params.timeout, session.settings.get("tools.maxTimeout")) * 1000;
+ 		const resolved = await resolveBackend(session, cellLanguage, { signal, timeoutMs: cellTimeoutMs });
+ 		const source = await prepareEvalSource(params, session, signal);
+-		if (shadowCell && (source.filename || source.packages?.length || source.environment)) {
+-			await shadowCell.discard("file-backed or environment-changing eval requires authoritative execution");
++		if (shadowCell && (kernel || source.filename || source.packages?.length || source.environment)) {
++			await shadowCell.discard(
++				"named-kernel, file-backed or environment-changing eval requires authoritative execution",
++			);
+ 		}
+ 		const cells: ResolvedEvalCell[] = [
+ 			{
+@@ -516,6 +566,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 					source.environment ?? (this.#environmentModes[cellLanguage] === "project" ? "project" : undefined),
+ 				timeoutMs: cellTimeoutMs,
+ 				reset: params.reset ?? false,
++				kernel,
+ 				resolved,
+ 			},
+ 		];
+@@ -855,6 +906,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 			for (let i = 0; i < cells.length; i++) {
+ 				const cell = cells[i];
+ 				const backend = cell.resolved.backend;
++				// Wait for any cell already running on this kernel BEFORE arming the
++				// timeout: see acquireKernelLane.
++				const releaseLane = await acquireKernelLane(
++					`${backend.id}\0${session.cwd}\0${namedKernelSessionId(sessionId, cell.kernel)}`,
++					signal ? AbortSignal.any([signal, sessionAbortController.signal]) : sessionAbortController.signal,
++				);
+ 				// The per-cell `timeout` is a budget on the cell runtime's *own*
+ 				// work. Host-side waits on `agent()`/`completion()` handles suspend
+ 				// that budget entirely and restart a fresh timeout window when control
+@@ -897,6 +954,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 						session,
+ 						idleTimeoutMs,
+ 						reset: cell.reset,
++						kernel: cell.kernel,
+ 						filename: cell.filename,
+ 						packages: cell.packages,
+ 						environment: cell.environment,
+@@ -924,6 +982,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 					});
+ 				} finally {
+ 					idle?.dispose();
++					releaseLane();
+ 					// Publish the cell's last live state before its final output replaces it.
+ 					flushUpdate();
+ 					activeLiveCell = undefined;
+diff --git a/packages/coding-agent/test/tools/eval-named-kernels.test.ts b/packages/coding-agent/test/tools/eval-named-kernels.test.ts
+new file mode 100644
+index 0000000..ee0693a
+--- /dev/null
++++ b/packages/coding-agent/test/tools/eval-named-kernels.test.ts
+@@ -0,0 +1,78 @@
++import { afterAll, describe, expect, it } from "bun:test";
++import { TempDir } from "@oh-my-pi/pi-utils";
++import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
++import { disposeAllKernelSessions } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
++import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
++import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
++
++const temp = TempDir.createSync("@omp-named-kernels-");
++
++function makeSession(): ToolSession {
++	return {
++		cwd: temp.path(),
++		hasUI: false,
++		getSessionFile: () => null,
++		getSessionSpawns: () => null,
++		settings: Settings.isolated({ "eval.autoBackground.enabled": false }),
++	} as unknown as ToolSession;
++}
++
++function text(result: { content: Array<{ type: string; text?: string }> }): string {
++	return result.content.map(block => (block.type === "text" ? (block.text ?? "") : "")).join("\n");
++}
++
++describe("EvalTool named kernels", () => {
++	afterAll(async () => {
++		await disposeAllKernelSessions();
++		temp.removeSync();
++	});
++
++	it("keeps separate state per kernel name", async () => {
++		const tool = new EvalTool(makeSession());
++		await tool.execute("seed-main", { language: "py", code: "who = 'main'", timeout: 60 });
++		await tool.execute("seed-a", { language: "py", code: "who = 'a'", kernel: "a", timeout: 60 });
++
++		expect(text(await tool.execute("read-main", { language: "py", code: "print(who)" }))).toContain("main");
++		expect(text(await tool.execute("read-a", { language: "py", code: "print(who)", kernel: "a" }))).toContain("a");
++		const fresh = await tool.execute("read-b", { language: "py", code: "print('who' in dir())", kernel: "b" });
++		expect(text(fresh)).toContain("False");
++	});
++
++	it("runs calls on different kernels in parallel", async () => {
++		const tool = new EvalTool(makeSession());
++		await tool.execute("warm-p", { language: "py", code: "import time", kernel: "p", timeout: 60 });
++		await tool.execute("warm-q", { language: "py", code: "import time", kernel: "q", timeout: 60 });
++
++		const order: string[] = [];
++		const slow = tool
++			.execute("slow-p", { language: "py", code: "time.sleep(1.5)", kernel: "p" })
++			.then(() => order.push("p"));
++		const fast = tool
++			.execute("fast-q", { language: "py", code: "print(1)", kernel: "q" })
++			.then(() => order.push("q"));
++		await Promise.all([slow, fast]);
++		expect(order).toEqual(["q", "p"]);
++	});
++
++	it("never lets a queued cell's timeout interrupt the cell running on its kernel", async () => {
++		const tool = new EvalTool(makeSession());
++		await tool.execute("warm-lane", { language: "py", code: "import time", kernel: "lane", timeout: 60 });
++
++		const first = tool.execute("first", {
++			language: "py",
++			code: "time.sleep(1.5); print('first done')",
++			kernel: "lane",
++		});
++		// Queued behind `first`; its 1 s budget must start only once it runs.
++		const second = tool.execute("second", {
++			language: "py",
++			code: "print('second done')",
++			kernel: "lane",
++			timeout: 1,
++		});
++		const [firstResult, secondResult] = await Promise.all([first, second]);
++		expect(text(firstResult)).toContain("first done");
++		expect(text(firstResult)).not.toContain("KeyboardInterrupt");
++		expect(text(secondResult)).toContain("second done");
++	});
++});

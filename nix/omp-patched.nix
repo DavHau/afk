@@ -133,6 +133,20 @@
 #   PATH) on every request, diffed runner-side so cell-set variables
 #   survive. afk disables bash; without this, devshell variables never
 #   reach `subprocess` calls and direnv reloads never reach the kernel.
+# - omp-eval-default-timeout: eval cells default to a 300 s deadline (bash's
+#   default) instead of upstream's 30 s. With bash disabled every command
+#   runs in eval, and the 30 s default timed out routine ssh/network calls —
+#   a timed-out cell that ignores the interrupt gets its whole kernel killed.
+# - omp-task-private-eval-kernel: task subagents no longer inherit the
+#   parent's eval session id (opt-in via shareEvalSession: true, which no
+#   caller sets). A shared kernel is one process for every non-isolated
+#   agent: one agent's timeout killed the others' cells and state
+#   (2026-10-04 nmm session). Ships one regression test.
+# - omp-eval-named-kernels: eval takes an optional `kernel` name selecting a
+#   separate retained kernel; named-kernel calls run in parallel. A host-side
+#   lane runs one cell per kernel and arms its timeout only once it runs, so
+#   a queued cell's timeout never SIGINTs the cell ahead of it. Applies after
+#   omp-task-private-eval-kernel (shares eval.md context). Ships tests.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -178,6 +192,9 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-anthropic-weekly-reset-priority.patch
     ../patches/omp/omp-statusline-anthropic-account.patch
     ../patches/omp/omp-eval-host-env-sync.patch
+    ../patches/omp/omp-eval-default-timeout.patch
+    ../patches/omp/omp-task-private-eval-kernel.patch
+    ../patches/omp/omp-eval-named-kernels.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────
   # The pi-natives Rust addon is built once, from upstream source plus the
