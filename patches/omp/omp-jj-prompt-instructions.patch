@@ -14,6 +14,14 @@ What must survive a rebase:
   prescribed) rather than the exact wording. (18.0.11 compressed all
   four prompts; the same four spots were re-worded in place.)
 
+Rebased 18.2.10 -> 18.6.0: upstream rewrote system-prompt.md (the
+destructive-commands line now reads "destructive git commands or delete
+unrelated code", sections renumbered) and orchestrate-notice.md (dispatch
+step now mentions auto-delivered results / `wait`). The same four spots
+were re-worded in place against the new text; no other built-in prompt
+newly prescribes state-changing git subcommands (jevify-notice's read-only
+`git show` works unchanged in a colocated repo).
+
 diff --git a/packages/coding-agent/src/prompts/system/commit-message-system.md b/packages/coding-agent/src/prompts/system/commit-message-system.md
 index be96ec2054..77263c95bf 100644
 --- a/packages/coding-agent/src/prompts/system/commit-message-system.md
@@ -25,7 +33,7 @@ index be96ec2054..77263c95bf 100644
  Format: `type(scope): description`
  Type: feat|fix|refactor|chore|test|docs. Scope optional.
 diff --git a/packages/coding-agent/src/prompts/system/orchestrate-notice.md b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
-index 49f6e16e01..e16091a0dc 100644
+index 42699778bd..c25c3c60f9 100644
 --- a/packages/coding-agent/src/prompts/system/orchestrate-notice.md
 +++ b/packages/coding-agent/src/prompts/system/orchestrate-notice.md
 @@ -19,7 +19,7 @@ Decompose, dispatch, verify, iterate. Substantial or parallelizable work: `task`
@@ -35,7 +43,7 @@ index 49f6e16e01..e16091a0dc 100644
 -1. Ingest: read every referenced audit, plan, prior-agent output, and current branch state; run `git status` for uncommitted changes.
 +1. Ingest: read every referenced audit, plan, prior-agent output, and current branch state; run `jj st` (or `git status`) for uncommitted changes.
  2. Plan: materialize full work surface{{#has tools "todo"}} in ordered `todo` phases{{/has}}; list each phase's parallel units.
- 3. Dispatch: launch all parallel `task` subagents in one message; collect every result (async results / `hub` wait) before advancing.
+ 3. Dispatch: launch all parallel `task` subagents in one message; collect every auto-delivered result before advancing.{{#has tools "wait"}} Blocked with nothing else to do? Use `wait`.{{/has}}
  4. Verify: run gates; on failure dispatch fix-ups and re-verify. Never advance on red.
 diff --git a/packages/coding-agent/src/prompts/system/plan-mode-active.md b/packages/coding-agent/src/prompts/system/plan-mode-active.md
 index 88d1899670..159ef0d22a 100644
@@ -50,21 +58,21 @@ index 88d1899670..159ef0d22a 100644
  - Canonical plan: MUST write `local://<slug>-plan.md`.
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index affc889aac..24374c6dbd 100644
+index 863b25747b..30e891a436 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -204,7 +204,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
- - Fix source; NEVER suppress symptom/special-case input unless asked.
- - Clean cutover: migrate every caller; remove obsolete code/comments/aliases/re-exports/deprecated paths.
- - Prefer existing-file updates over new files. Review as user.
--{{#has tools "ask"}}- Ask before destructive commands/deleting unrelated code you didn't write; code the cutover obsoletes is in scope.{{else}}- NEVER run destructive git commands/delete unrelated code you didn't write; code the cutover obsoletes is in scope.{{/has}}
-+{{#has tools "ask"}}- Ask before destructive commands/deleting unrelated code you didn't write; code the cutover obsoletes is in scope.{{else}}- NEVER run destructive git/jj commands/delete unrelated code you didn't write; code the cutover obsoletes is in scope.{{/has}}
+@@ -186,7 +186,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
  
- # 5. Verify
- - NEVER yield non-trivial work without deliverable proof:
-@@ -269,5 +269,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
+ # 4. Implement
+ - Prefer existing files; review as user.
+-{{#has tools "ask"}}- Ask before destructive commands or deleting unrelated code you didn't write; code made obsolete by cutover is in scope.{{else}}- NEVER run destructive git commands or delete unrelated code you didn't write; code made obsolete by cutover is in scope.{{/has}}
++{{#has tools "ask"}}- Ask before destructive commands or deleting unrelated code you didn't write; code made obsolete by cutover is in scope.{{else}}- NEVER run destructive git/jj commands or delete unrelated code you didn't write; code made obsolete by cutover is in scope.{{/has}}
+ 
+ {{#if subagent}}
+ # 5. Hand-off
+@@ -246,5 +246,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
  <critical>
- - NEVER yield while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn.
+ - NEVER yield before complete deliverable or while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn.
  - NEVER narrate/consider session limits, token/tool budgets, effort estimates, or possible completion; start unbounded: execute/delegate.
 -- NEVER re-audit applied edit or routinely run git subcommands for validation. Tool results are verification.
 +- NEVER re-audit applied edit or routinely run git/jj subcommands for validation. Tool results are verification.

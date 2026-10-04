@@ -11,31 +11,34 @@ account the plain lookup falls back to before any getApiKey.
 What must survive a rebase:
 - `preferEarlierSecondaryReset?: boolean` on CredentialRankingStrategy
   (usage.ts) and the claude strategy opting in (usage/claude.ts).
-- `secondaryResetAt` on UsageRankedCandidate, populated at BOTH ranking
-  sites (api-key and oauth) via #resolveWindowResetAt, +Infinity when
-  unknown, so unknown resets sort last.
+- `secondaryResetAt` on UsageRankedCandidate (auth/rank.ts), populated at
+  BOTH ranking sites in auth/select.ts (#rankApiKeySelections and
+  #rankOAuthSelections) via windowResetAt, +Infinity when unknown, so
+  unknown resets sort last; orderUsageRankedCandidates carries it onto
+  the returned UsageCandidate for the warm-pin eviction check.
 - The comparator step sits after the hasPriorityBoost tie-break and
   BEFORE the short-window hot guard (and everything below it), with the
   60s tie tolerance (SECONDARY_RESET_TIE_TOLERANCE_MS) so near-identical
   schedules keep load-balancing.
-- `provider` threaded into #orderUsageRankedCandidates and both compare
-  helpers so the strategy flag can be resolved during ranking.
-- `getOAuthAccountIdentity(provider, sessionId, { sessionStickyOnly })`:
-  sticky-only lookups suppress the pre-attribution fallback to the first
-  stored credential.
-- A fresh manual pin clears reactive rate-limit blocks on the target so
-  the next request actually tries it; a persisted-session restore
-  (options.lastUsedAtMs) keeps existing blocks.
+- The strategy's flag threaded into orderUsageRankedCandidates and both
+  compare helpers (rank.ts is a pure module, so the flag is passed, not
+  resolved from the provider).
+- `oauth.identity(provider, sessionId, { sessionStickyOnly })` (via
+  SessionAffinity.activeOAuth): sticky-only lookups suppress the
+  pre-attribution fallback to the first stored credential.
+- An explicit pin (`sessions.pin` without `restoredAtMs`) clears reactive
+  rate-limit blocks on the target (CredentialBlocks.clearAll, wired into
+  SessionAffinity) so the next request actually tries it; a
+  persisted-session restore keeps existing blocks.
 - Warm-pin re-rank: for strategies with preferEarlierSecondaryReset,
-  #resolveOAuthSelection ranks even while the session's pin is warm and
-  available (upstream skips ranking for 60 min after each use, so a busy
-  session never re-ranks). #rankOAuthSelections' `warmPinnedIndex` keeps
-  the pin in front unless the top candidate's secondary window resets
-  more than SECONDARY_RESET_TIE_TOLERANCE_MS earlier (both resets known)
-  or the pin itself ranks blocked — drain/usage differences alone never
-  cost the warm prompt cache. Fresh manual pins are exempt
-  (#manualSessionPins, process-local, keyed by credential id) while they
-  remain the session's sticky credential.
+  CredentialSelector.resolveOAuth ranks even while the session's automatic
+  pin is warm and available (upstream skips ranking inside stickyWarmMs,
+  so a busy session never re-ranks). A third automatic-pin eviction policy
+  ("soonest reset") evicts the pin only when the best-ranked usable
+  sibling ahead of it resets more than SECONDARY_RESET_TIE_TOLERANCE_MS
+  earlier (both resets known) — drain/usage differences alone never cost
+  the warm prompt cache; a pin that ranks blocked is already dropped by
+  upstream. Explicit user pins are exempt.
 
 Rebase notes (17.2.14 -> 18.0.11): upstream added
 `pinSessionOAuthAccount` (used by `/session pin` and the
@@ -45,77 +48,79 @@ block-clearing fold into that upstream method, gated to fresh manual
 pins. Upstream also added the `usageMeasured` comparator step; the
 soonest-reset preference still ranks above it.
 
+Rebased 18.2.10 -> 18.6.0: upstream split the monolithic auth-storage.ts
+into auth/* modules behind namespaced APIs (keys.get, oauth.identity,
+sessions.pin, limits.markReached, credentials.set/reload). Ranking moved
+to the pure auth/rank.ts, selection to auth/select.ts, pins to
+auth/affinity.ts. Upstream also added the allowanceSpent / inReserve
+comparator steps (above hasPriorityBoost, so above the soonest-reset step)
+and an `explicit` flag on session pins (set by the user-facing pin API,
+persisted, never evicted by ranking or reserve) with an
+automaticPinWouldBeEvicted hook. That `explicit` flag absorbs this patch's
+process-local #manualSessionPins map, which is dropped; the warm-pin
+`warmPinnedIndex` re-order is re-cut as a soonest-reset eviction policy
+inside upstream's automaticPinWouldBeEvicted (checked before and after
+OAuth preflight). Block clearing moved into SessionAffinity.pin via an
+injected CredentialBlocks. Tests moved to the namespaced API; the
+weekly-reset test now uses a temp SqliteAuthCredentialStore instead of a
+hand-rolled store (the store interface grew substantially).
+
 diff --git a/packages/ai/src/auth-storage.ts b/packages/ai/src/auth-storage.ts
-index df8bb72626..e8d48c47da 100644
+index 80cc547b68..fcd79cf05d 100644
 --- a/packages/ai/src/auth-storage.ts
 +++ b/packages/ai/src/auth-storage.ts
-@@ -80,6 +80,10 @@ import { zaiRankingStrategy, zaiUsageProvider } from "./usage/zai";
- export { isSqliteBusyError, isSqliteCorruptionError, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
+@@ -185,7 +185,7 @@ export class AuthStorage {
+ 		// override's `cacheVersion` separates its rows from other processes sharing the store.
+ 		const usageCache = new UsageCache(store, pool, provider => usage.providerFor(provider));
+ 		const blocks = new CredentialBlocks({ store, pool, health: blockHealth, usageCache, strategies });
+-		const affinity = new SessionAffinity(store, pool, overrides);
++		const affinity = new SessionAffinity(store, pool, overrides, blocks);
+ 		const usage = new UsageService({
+ 			store,
+ 			pool,
+diff --git a/packages/ai/src/auth/affinity.ts b/packages/ai/src/auth/affinity.ts
+index c5fcce092b..93da4fb261 100644
+--- a/packages/ai/src/auth/affinity.ts
++++ b/packages/ai/src/auth/affinity.ts
+@@ -2,6 +2,7 @@ import { logger } from "@oh-my-pi/pi-utils";
+ import { getEnvApiKey } from "../stream";
+ import type { AuthCredential, OAuthCredential, SessionsApi } from "./types";
+ import type { AuthCredentialStore } from "./store";
++import type { CredentialBlocks } from "./blocks";
+ import type { CredentialPool } from "./pool";
+ import type { KeyOverrides } from "./cascade";
  
- const USAGE_RANKING_METRIC_EPSILON = 1e-9;
-+// Secondary-window resets within this span count as simultaneous for
-+// preferEarlierSecondaryReset ranking, so near-identical reset schedules keep
-+// load-balancing instead of pinning on millisecond skew.
-+const SECONDARY_RESET_TIE_TOLERANCE_MS = 60_000;
- /**
-  * Primary (short, e.g. 5h) window used-fraction at or above which a candidate
-  * is demoted behind cooler siblings during ranking: a nearly exhausted short
-@@ -1339,6 +1343,8 @@ type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
- 	usageMeasured: boolean;
- 	planPriority: number;
- 	secondaryUsed: number;
-+	/** Secondary-window reset (epoch ms); +Infinity when unknown. */
-+	secondaryResetAt: number;
- 	secondaryRequiredDrain: number;
- 	primaryUsed: number;
- 	primaryRequiredDrain: number;
-@@ -1370,6 +1376,14 @@ export class AuthStorage {
- 		string,
- 		Map<string, { type: AuthCredential["type"]; index: number; credentialId?: number; lastUsedAtMs?: number }>
- 	> = new Map();
-+	/**
-+	 * provider -> sessionId -> credential id of a fresh manual pin
-+	 * ({@link AuthStorage.pinSessionOAuthAccount} without `lastUsedAtMs`).
-+	 * Exempts the pin from the warm soonest-reset re-rank while it stays the
-+	 * session's sticky credential; process-local, so a resumed session's
-+	 * restored pin re-ranks like any automatic attribution.
-+	 */
-+	#manualSessionPins: Map<string, Map<string, number>> = new Map();
- 	/** Recent bearer fingerprints resolved for each durable OAuth row; used only for delayed usage-limit attribution. */
- 	#oauthBearerFingerprints: Map<string, Map<number, string[]>> = new Map();
- 	/** Maps provider:type -> credentialIndex -> blockedUntilMs for temporary backoff. */
-@@ -2390,6 +2404,7 @@ export class AuthStorage {
- 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
- 				planPriority: 0,
- 				secondaryUsed: this.#normalizeUsageFraction(secondary),
-+				secondaryResetAt: this.#resolveWindowResetAt(secondary?.window) ?? Number.POSITIVE_INFINITY,
- 				secondaryRequiredDrain: this.#computeWindowRequiredDrain(
- 					secondary,
- 					nowMs,
-@@ -2400,7 +2415,7 @@ export class AuthStorage {
- 				orderPos,
- 			});
+@@ -42,11 +43,13 @@ export class SessionAffinity implements SessionsApi {
+ 	#store: AuthCredentialStore;
+ 	#pool: CredentialPool;
+ 	#overrides: KeyOverrides;
++	#blocks: CredentialBlocks;
+ 
+-	constructor(store: AuthCredentialStore, pool: CredentialPool, overrides: KeyOverrides) {
++	constructor(store: AuthCredentialStore, pool: CredentialPool, overrides: KeyOverrides, blocks: CredentialBlocks) {
+ 		this.#store = store;
+ 		this.#pool = pool;
+ 		this.#overrides = overrides;
++		this.#blocks = blocks;
+ 	}
+ 
+ 	/** Drop every pin for a provider, both in memory and in the persisted cache. */
+@@ -222,7 +225,12 @@ export class SessionAffinity implements SessionsApi {
  		}
--		return this.#orderUsageRankedCandidates(ranked, "none");
-+		return this.#orderUsageRankedCandidates(ranked, "none", undefined);
  	}
  
- 	async #selectApiKeyCredential(
-@@ -3134,7 +3149,11 @@ export class AuthStorage {
- 		);
- 	}
- 
--	#resolveActiveOAuthCredential(provider: string, sessionId?: string): OAuthCredential | undefined {
-+	#resolveActiveOAuthCredential(
-+		provider: string,
-+		sessionId?: string,
-+		sessionStickyOnly = false,
-+	): OAuthCredential | undefined {
- 		const allCredentials = this.#getCredentialsForProvider(provider);
+-	activeOAuth(provider: string, sessionId?: string): OAuthCredential | undefined {
++	/**
++	 * With `sessionStickyOnly` the pre-attribution fallback to the first stored
++	 * credential is suppressed: only a credential the session is verifiably
++	 * routed to (selected or pinned) is returned.
++	 */
++	activeOAuth(provider: string, sessionId?: string, sessionStickyOnly = false): OAuthCredential | undefined {
+ 		const allCredentials = this.#pool.credentials(provider);
  		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
  		if (oauthCredentials.length === 0) return undefined;
-@@ -3147,6 +3166,11 @@ export class AuthStorage {
- 		const sessionPref = this.#getSessionCredential(provider, sessionId);
+@@ -235,6 +243,11 @@ export class SessionAffinity implements SessionsApi {
+ 		const sessionPref = this.get(provider, sessionId);
  		// If the session has been routed to a stored API key, do not inject OAuth account_uuid.
  		if (sessionPref !== undefined && sessionPref.type !== "oauth") return undefined;
 +		// Sticky-only callers (e.g. status-line account display) want the account
@@ -126,190 +131,317 @@ index df8bb72626..e8d48c47da 100644
  
  		// When no session-sticky credential is recorded yet (first call before any getApiKey,
  		// or all stored credentials are unavailable), the request falls through to the env-key
-@@ -3181,9 +3205,16 @@ export class AuthStorage {
+@@ -258,12 +271,15 @@ export class SessionAffinity implements SessionsApi {
+ 	 * The durable credential id keeps the pin stable across credential refreshes,
+ 	 * storage reordering, and process restarts. By default this is an explicit
+ 	 * user pin: ranking and account reserve never evict it; hard unavailability
+-	 * and auth retry may still route around it.
++	 * and auth retry may still route around it. An explicit pin also clears any
++	 * reactive rate-limit blocks on the target so the next request actually
++	 * tries it (a live 429 re-blocks and rotates as usual).
+ 	 *
+ 	 * `options.restoredAtMs` instead restores an automatic affinity recorded by a
+ 	 * persisted session, backdated to its last use, so it keeps the provider's
+ 	 * warm-window semantics: a resume inside the prompt-cache TTL reuses the
+-	 * account, a stale resume re-ranks.
++	 * account, a stale resume re-ranks. A restore keeps existing rate-limit
++	 * blocks.
+ 	 */
+ 	pin(provider: string, sessionId: string, credentialId: number, options?: { restoredAtMs?: number }): boolean {
+ 		if (!sessionId || this.#overrides.has(provider)) {
+@@ -275,6 +291,7 @@ export class SessionAffinity implements SessionsApi {
+ 		if (target?.credential.type !== "oauth") return false;
+ 		const restoredAtMs = options?.restoredAtMs;
+ 		this.record(provider, sessionId, "oauth", index, restoredAtMs, restoredAtMs === undefined);
++		if (restoredAtMs === undefined) this.#blocks.clearAll(provider, credentialId);
+ 		return true;
+ 	}
+ 
+diff --git a/packages/ai/src/auth/oauth.ts b/packages/ai/src/auth/oauth.ts
+index 1131114ba4..ce0abb1216 100644
+--- a/packages/ai/src/auth/oauth.ts
++++ b/packages/ai/src/auth/oauth.ts
+@@ -313,9 +313,15 @@ export class OAuthAccounts implements OAuthApi {
  	 * Get the OAuth account identity for a provider, preferring the credential that
  	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
  	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
 +	 * With `sessionStickyOnly` the pre-attribution fallback to the first stored
-+	 * credential is suppressed: identity is only reported once a getApiKey has
-+	 * actually routed the session to an OAuth credential.
++	 * credential is suppressed.
  	 */
--	getOAuthAccountIdentity(provider: string, sessionId?: string): OAuthAccountIdentity | undefined {
--		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId);
-+	getOAuthAccountIdentity(
+-	identity(provider: string, sessionId?: string): OAuthAccountIdentity | undefined {
+-		const preferred = this.#deps.affinity.activeOAuth(provider, sessionId);
++	identity(
 +		provider: string,
 +		sessionId?: string,
 +		options?: { sessionStickyOnly?: boolean },
 +	): OAuthAccountIdentity | undefined {
-+		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId, options?.sessionStickyOnly === true);
++		const preferred = this.#deps.affinity.activeOAuth(provider, sessionId, options?.sessionStickyOnly === true);
  		if (!preferred) return undefined;
  		const identity: OAuthAccountIdentity = {};
  		if (typeof preferred.accountId === "string" && preferred.accountId.length > 0) {
-@@ -5044,6 +5075,7 @@ export class AuthStorage {
- 		left: UsageRankedCandidate<AuthCredential>,
- 		right: UsageRankedCandidate<AuthCredential>,
- 		planRequirement: OpenAICodexPlanRequirement,
-+		provider: string | undefined,
- 	): number {
- 		if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
- 		if (left.blocked && right.blocked) {
-@@ -5056,6 +5088,14 @@ export class AuthStorage {
- 			return left.planPriority - right.planPriority;
- 		}
- 		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
-+		if (
-+			provider !== undefined &&
-+			this.#rankingStrategyResolver?.(provider)?.preferEarlierSecondaryReset === true &&
-+			// NaN (both Infinity) and near-simultaneous resets fall through as ties.
-+			Math.abs(left.secondaryResetAt - right.secondaryResetAt) > SECONDARY_RESET_TIE_TOLERANCE_MS
-+		) {
-+			return left.secondaryResetAt < right.secondaryResetAt ? -1 : 1;
-+		}
- 		// Short-window guard: candidates whose primary (e.g. 5h) window is
- 		// nearly exhausted rank behind cool ones regardless of drain urgency —
- 		// overflow lands on the next-most-urgent cool account instead.
-@@ -5088,16 +5128,18 @@ export class AuthStorage {
- 		left: UsageRankedCandidate<AuthCredential>,
- 		right: UsageRankedCandidate<AuthCredential>,
- 		planRequirement: OpenAICodexPlanRequirement,
-+		provider: string | undefined,
- 	): number {
--		const priority = this.#compareUsageRankedCandidatePriority(left, right, planRequirement);
-+		const priority = this.#compareUsageRankedCandidatePriority(left, right, planRequirement, provider);
- 		return priority !== 0 ? priority : left.orderPos - right.orderPos;
- 	}
+diff --git a/packages/ai/src/auth/rank.ts b/packages/ai/src/auth/rank.ts
+index d4d0372ef8..39c7a64ee1 100644
+--- a/packages/ai/src/auth/rank.ts
++++ b/packages/ai/src/auth/rank.ts
+@@ -25,6 +25,12 @@ export type UsageCandidate<T extends AuthCredential> = {
+ 	 * spent, so if it still serves it draws on paid overage such as Codex credits.
+ 	 */
+ 	allowanceSpent?: boolean;
++	/**
++	 * Present after ranking: secondary-window reset (epoch ms), +Infinity when
++	 * unknown. Used to decide whether a warm automatic pin yields to a sibling
++	 * whose window resets sooner (strategies with `preferEarlierSecondaryReset`).
++	 */
++	secondaryResetAt?: number;
+ };
  
- 	#orderUsageRankedCandidates<T extends AuthCredential>(
- 		candidates: UsageRankedCandidate<T>[],
- 		planRequirement: OpenAICodexPlanRequirement,
-+		provider: string | undefined,
- 	): UsageCandidate<T>[] {
--		candidates.sort((left, right) => this.#compareUsageRankedCandidates(left, right, planRequirement));
-+		candidates.sort((left, right) => this.#compareUsageRankedCandidates(left, right, planRequirement, provider));
- 		return candidates.map(candidate => ({
- 			selection: candidate.selection,
- 			usage: candidate.usage,
-@@ -5117,6 +5159,14 @@ export class AuthStorage {
- 		blockScope?: string;
- 		/** Scopes a block may live under for this request; reads honour all of them. */
- 		blockScopes?: readonly string[];
-+		/**
-+		 * Credential index of a warm, available session pin. The pin keeps the
-+		 * front slot unless the top-ranked candidate's secondary window resets
-+		 * strictly earlier (beyond SECONDARY_RESET_TIE_TOLERANCE_MS); every
-+		 * other comparator step would only trade the warm prompt cache for a
-+		 * marginal gain, which the un-ranked warm path never did either.
-+		 */
-+		warmPinnedIndex?: number;
- 	}): Promise<OAuthCandidate[]> {
- 		const nowMs = Date.now();
- 		const { strategy } = args;
-@@ -5235,6 +5285,7 @@ export class AuthStorage {
+ /** OAuth credential eligible for usage ranking. */
+@@ -48,6 +54,8 @@ export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> &
+ 	usageMeasured: boolean;
+ 	planPriority: number;
+ 	secondaryUsed: number;
++	/** Secondary-window reset (epoch ms); +Infinity when unknown. */
++	secondaryResetAt: number;
+ 	secondaryRequiredDrain: number;
+ 	primaryUsed: number;
+ 	primaryRequiredDrain: number;
+@@ -59,6 +67,12 @@ export type RankedOAuthCandidate = UsageRankedCandidate<OAuthCredential>;
+ export type RankedApiKeyCandidate = UsageRankedCandidate<ApiKeyCredential>;
+ 
+ const USAGE_RANKING_METRIC_EPSILON = 1e-9;
++/**
++ * Secondary-window resets within this span count as simultaneous for
++ * preferEarlierSecondaryReset ranking, so near-identical reset schedules keep
++ * load-balancing instead of pinning on millisecond skew.
++ */
++export const SECONDARY_RESET_TIE_TOLERANCE_MS = 60_000;
+ /**
+  * Primary (short, e.g. 5h) window used-fraction at or above which a candidate
+  * is demoted behind cooler siblings during ranking: a nearly exhausted short
+@@ -85,6 +99,7 @@ function compareUsageRankedCandidatePriority(
+ 	left: UsageRankedCandidate<AuthCredential>,
+ 	right: UsageRankedCandidate<AuthCredential>,
+ 	planGated: boolean,
++	preferEarlierSecondaryReset: boolean,
+ ): number {
+ 	if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
+ 	if (left.blocked && right.blocked) {
+@@ -101,6 +116,13 @@ function compareUsageRankedCandidatePriority(
+ 	if (left.allowanceSpent !== right.allowanceSpent) return left.allowanceSpent ? 1 : -1;
+ 	if (left.inReserve !== right.inReserve) return left.inReserve ? 1 : -1;
+ 	if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
++	if (
++		preferEarlierSecondaryReset &&
++		// NaN (both Infinity) and near-simultaneous resets fall through as ties.
++		Math.abs(left.secondaryResetAt - right.secondaryResetAt) > SECONDARY_RESET_TIE_TOLERANCE_MS
++	) {
++		return left.secondaryResetAt < right.secondaryResetAt ? -1 : 1;
++	}
+ 	// Short-window guard: candidates whose primary (e.g. 5h) window is
+ 	// nearly exhausted rank behind cool ones regardless of drain urgency —
+ 	// overflow lands on the next-most-urgent cool account instead.
+@@ -134,17 +156,22 @@ function compareUsageRankedCandidates(
+ 	left: UsageRankedCandidate<AuthCredential>,
+ 	right: UsageRankedCandidate<AuthCredential>,
+ 	planGated: boolean,
++	preferEarlierSecondaryReset: boolean,
+ ): number {
+-	const priority = compareUsageRankedCandidatePriority(left, right, planGated);
++	const priority = compareUsageRankedCandidatePriority(left, right, planGated, preferEarlierSecondaryReset);
+ 	return priority !== 0 ? priority : left.orderPos - right.orderPos;
+ }
+ 
+-/** Sort ranked candidates by blocks, plan, spent allowance, reserve, boost, hot window, usage and drain. */
++/**
++ * Sort ranked candidates by blocks, plan, spent allowance, reserve, boost,
++ * soonest secondary reset (when the strategy opts in), hot window, usage and drain.
++ */
+ export function orderUsageRankedCandidates<T extends AuthCredential>(
+ 	candidates: UsageRankedCandidate<T>[],
+ 	planGated: boolean,
++	preferEarlierSecondaryReset: boolean,
+ ): UsageCandidate<T>[] {
+-	candidates.sort((left, right) => compareUsageRankedCandidates(left, right, planGated));
++	candidates.sort((left, right) => compareUsageRankedCandidates(left, right, planGated, preferEarlierSecondaryReset));
+ 	return candidates.map(candidate => ({
+ 		selection: candidate.selection,
+ 		usage: candidate.usage,
+@@ -152,5 +179,6 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
+ 		inReserve: candidate.inReserve,
+ 		reserveMeasured: candidate.reserveMeasured,
+ 		allowanceSpent: candidate.allowanceSpent,
++		secondaryResetAt: candidate.secondaryResetAt,
+ 	}));
+ }
+diff --git a/packages/ai/src/auth/select.ts b/packages/ai/src/auth/select.ts
+index 567a461ba3..95421962b0 100644
+--- a/packages/ai/src/auth/select.ts
++++ b/packages/ai/src/auth/select.ts
+@@ -18,6 +18,7 @@ import { authCredentialEquals, type CredentialPool } from "./pool";
+ import {
+ 	orderUsageRankedCandidates,
+ 	planPriority,
++	SECONDARY_RESET_TIE_TOLERANCE_MS,
+ 	type ApiKeyCandidate,
+ 	type ApiKeySelection,
+ 	type OAuthCandidate,
+@@ -37,6 +38,7 @@ import {
+ 	scopedUsageLimits,
+ 	usageResetAtMs,
+ 	windowRequiredDrain,
++	windowResetAt,
+ } from "./usage-report";
+ 
+ /** Temporary block after a transient OAuth refresh failure. */
+@@ -272,13 +274,14 @@ export class CredentialSelector {
  				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
- 				planPriority: getOpenAICodexPlanPriority(usage, args.planRequirement),
- 				secondaryUsed: this.#normalizeUsageFraction(secondary),
-+				secondaryResetAt: this.#resolveWindowResetAt(secondary?.window) ?? Number.POSITIVE_INFINITY,
- 				secondaryRequiredDrain: this.#computeWindowRequiredDrain(
- 					secondary,
- 					nowMs,
-@@ -5245,7 +5296,25 @@ export class AuthStorage {
+ 				planPriority: 0,
+ 				secondaryUsed: normalizeUsageFraction(secondary),
++				secondaryResetAt: windowResetAt(secondary?.window) ?? Number.POSITIVE_INFINITY,
+ 				secondaryRequiredDrain: windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
+ 				primaryUsed: normalizeUsageFraction(primary),
+ 				primaryRequiredDrain: windowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
  				orderPos,
  			});
  		}
--		return this.#orderUsageRankedCandidates(ranked, args.planRequirement);
-+		const ordered = this.#orderUsageRankedCandidates(ranked, args.planRequirement, args.provider);
-+		if (args.warmPinnedIndex === undefined) return ordered;
-+		// #orderUsageRankedCandidates sorted `ranked` in place: indices line up with `ordered`.
-+		const pinnedPos = ranked.findIndex(candidate => candidate.selection.index === args.warmPinnedIndex);
-+		if (pinnedPos <= 0) return ordered;
-+		const pinned = ranked[pinnedPos];
-+		const top = ranked[0];
-+		// A pin whose usage turned out exhausted ranks as blocked: let the ranking move it.
-+		if (pinned.blocked) return ordered;
-+		// Both resets must be known: a failed usage fetch on either side is no evidence
-+		// that the reset order changed, and must not cost the warm cache.
-+		const resetOrderChanged =
-+			Number.isFinite(top.secondaryResetAt) &&
-+			Number.isFinite(pinned.secondaryResetAt) &&
-+			top.secondaryResetAt + SECONDARY_RESET_TIE_TOLERANCE_MS < pinned.secondaryResetAt;
-+		if (resetOrderChanged) return ordered;
-+		const [kept] = ordered.splice(pinnedPos, 1);
-+		ordered.unshift(kept);
-+		return ordered;
+-		return orderUsageRankedCandidates(ranked, false);
++		return orderUsageRankedCandidates(ranked, false, strategy.preferEarlierSecondaryReset === true);
+ 	}
+ 
+ 	async selectApiKey(
+@@ -475,6 +478,7 @@ export class CredentialSelector {
+ 				hasPriorityBoost: strategy?.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
+ 				planPriority: planPriority(args.planGate, usage),
+ 				secondaryUsed: strategy ? normalizeUsageFraction(secondary) : 0,
++				secondaryResetAt: windowResetAt(secondary?.window) ?? Number.POSITIVE_INFINITY,
+ 				secondaryRequiredDrain:
+ 					strategy === undefined ? 0 : windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
+ 				primaryUsed: strategy ? normalizeUsageFraction(primary) : 0,
+@@ -483,7 +487,11 @@ export class CredentialSelector {
+ 				orderPos,
+ 			});
+ 		}
+-		return orderUsageRankedCandidates(ranked, args.planGate !== undefined);
++		return orderUsageRankedCandidates(
++			ranked,
++			args.planGate !== undefined,
++			strategy?.preferEarlierSecondaryReset === true,
++		);
  	}
  
  	/**
-@@ -5316,7 +5385,24 @@ export class AuthStorage {
- 			sessionPreferredIndex !== undefined &&
+@@ -575,11 +583,17 @@ export class CredentialSelector {
  			sessionPreferredCanRefreshOrUse &&
- 			!this.#isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
--		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || !sessionPreferredIsWarm || hasPlanRequirement);
-+		// Strategies ranking by soonest secondary reset still rank under a warm pin: a long-running
-+		// session never idles past the warm window, so without this a sibling whose weekly window
-+		// rolled over ahead of the pin would never be picked up. #rankOAuthSelections keeps the pin
-+		// in front unless the reset order actually changed. A manual pin is the user's explicit
-+		// choice and stays exempt while it is still the sticky credential.
-+		const sessionPinIsManual =
-+			sessionId !== undefined &&
-+			sessionPreferredIndex !== undefined &&
-+			this.#manualSessionPins.get(provider)?.get(sessionId) ===
-+				this.#getStoredCredentials(provider)[sessionPreferredIndex]?.id;
-+		const rerankWarmPin =
-+			strategy?.preferEarlierSecondaryReset === true &&
-+			sessionPreferredIsAvailable &&
-+			sessionPreferredIsWarm &&
-+			!hasPlanRequirement &&
-+			!sessionPinIsManual;
-+		const shouldRank =
-+			checkUsage && (!sessionPreferredIsAvailable || !sessionPreferredIsWarm || hasPlanRequirement || rerankWarmPin);
- 		// When ranking, seed the pinned credential first in the evaluation order so it wins genuine
- 		// ties (the ranked comparator falls back to `orderPos`) without overriding a strictly-better
- 		// sibling — this respects the residual value of a same-account shared static prefix that other
-@@ -5345,6 +5431,7 @@ export class AuthStorage {
- 					rankingContext,
- 					blockScope,
- 					blockScopes,
-+					warmPinnedIndex: rerankWarmPin ? sessionPreferredIndex : undefined,
- 				})
- 			: order
- 					.map(idx => credentials[idx])
-@@ -6280,8 +6367,13 @@ export class AuthStorage {
- 	 * Pin one stored OAuth account as this session's preferred credential.
- 	 *
- 	 * The durable credential id keeps the pin stable across credential refreshes,
--	 * storage reordering, and process restarts. Normal auth retry and usage-limit
--	 * handling may still route around an unavailable account.
-+	 * storage reordering, and process restarts. A fresh manual pin (e.g.
-+	 * `/session pin`) clears any reactive rate-limit blocks on the target
-+	 * so the next request actually tries it (a live 429 re-blocks and rotates
-+	 * as usual) and exempts it from the warm soonest-reset re-rank; a
-+	 * persisted-session restore (`options.lastUsedAtMs`) keeps existing
-+	 * blocks and re-ranks normally. Normal auth retry and usage-limit handling
-+	 * may still route around an unavailable account.
- 	 *
- 	 * `options.lastUsedAtMs` backdates the sticky's last-use timestamp so a pin
- 	 * restored from a persisted session keeps the provider's warm-window
-@@ -6302,6 +6394,15 @@ export class AuthStorage {
- 		const target = stored[index];
- 		if (target?.credential.type !== "oauth") return false;
- 		this.#recordSessionCredential(provider, sessionId, "oauth", index, options?.lastUsedAtMs);
-+		if (options?.lastUsedAtMs === undefined) {
-+			this.#clearCredentialBlocks(provider, credentialId);
-+			let pins = this.#manualSessionPins.get(provider);
-+			if (!pins) {
-+				pins = new Map();
-+				this.#manualSessionPins.set(provider, pins);
+ 			!this.#deps.blocks.isBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
+ 		const sessionPinIsExplicit = sessionCredential?.type === "oauth" && sessionCredential.explicit === true;
++		const preferEarlierSecondaryReset = strategy?.preferEarlierSecondaryReset === true;
++		// Strategies ranking by soonest secondary reset still rank under a warm automatic pin: a
++		// long-running session never idles past the warm window, so without this a sibling whose
++		// weekly window rolled over ahead of the pin would never be picked up. The soonest-reset
++		// eviction below keeps the pin in front unless the reset order actually changed. An
++		// explicit user pin stays exempt.
+ 		const rankDespitePin =
+ 			!sessionPreferredIsAvailable ||
+ 			!sessionPreferredIsWarm ||
+ 			hasPlanRequirement ||
+-			(policyReserveEnabled && !sessionPinIsExplicit);
++			((policyReserveEnabled || preferEarlierSecondaryReset) && !sessionPinIsExplicit);
+ 		// A warm automatic pin whose allowance is spent keeps serving on paid overage
+ 		// (Codex credits) and is never blocked, so check it and rank when spent: a
+ 		// sibling with renewable allowance left must take over (#13889). tryOAuth
+@@ -651,13 +665,34 @@ export class CredentialSelector {
+ 				candidate.selection.index === sessionPreferredIndex,
+ 		);
+ 		const preferredCandidate = sessionPreferredCandidate === -1 ? undefined : candidates[sessionPreferredCandidate];
+-		// A warm automatic pin normally wins. Two policies may evict it, each only
++		// Siblings the soonest-reset ranking placed ahead of the pin, best first. Captured before the
++		// pin is promoted below so the post-preflight check still sees the ranked leader.
++		const rankedAheadOfPin =
++			preferEarlierSecondaryReset && shouldRank && sessionPreferredCandidate > 0
++				? candidates.slice(0, sessionPreferredCandidate)
++				: [];
++		// A warm automatic pin normally wins. Three policies may evict it, each only
+ 		// while a sibling is confirmed better: reserve (sibling measured outside
+-		// reserve) and spent allowance (unblocked sibling with allowance left).
+-		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean =>
+-			!sessionPinIsExplicit &&
+-			preferredCandidate !== undefined &&
+-			candidates.some(candidate => {
++		// reserve), spent allowance (unblocked sibling with allowance left), and
++		// soonest reset (the best-ranked usable sibling's secondary window resets
++		// more than SECONDARY_RESET_TIE_TOLERANCE_MS earlier; both resets must be
++		// known — a failed usage fetch is no evidence the reset order changed, and
++		// drain/usage differences alone never cost the warm prompt cache).
++		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean => {
++			if (sessionPinIsExplicit || preferredCandidate === undefined) return false;
++			const resetLeader = rankedAheadOfPin.find(
++				candidate => !excludePreflightFailures || !preflightFailures.has(candidate),
++			);
++			const pinResetAt = preferredCandidate.secondaryResetAt ?? Number.POSITIVE_INFINITY;
++			const leaderResetAt = resetLeader?.secondaryResetAt ?? Number.POSITIVE_INFINITY;
++			if (
++				Number.isFinite(pinResetAt) &&
++				Number.isFinite(leaderResetAt) &&
++				leaderResetAt + SECONDARY_RESET_TIE_TOLERANCE_MS < pinResetAt
++			) {
++				return true;
 +			}
-+			pins.set(sessionId, credentialId);
-+		}
- 		return true;
- 	}
- 
++			return candidates.some(candidate => {
+ 				if (candidate === preferredCandidate) return false;
+ 				if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
+ 				if (
+@@ -674,6 +709,7 @@ export class CredentialSelector {
+ 					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)
+ 				);
+ 			});
++		};
+ 		const pinEvictedBeforePreflight = automaticPinWouldBeEvicted(false);
+ 		if (
+ 			!hasPlanRequirement &&
+diff --git a/packages/ai/src/auth/types.ts b/packages/ai/src/auth/types.ts
+index 89fc287a7f..1c24318685 100644
+--- a/packages/ai/src/auth/types.ts
++++ b/packages/ai/src/auth/types.ts
+@@ -1058,8 +1058,15 @@ export interface OAuthApi {
+ 	 * Get the OAuth account identity for a provider, preferring the credential that
+ 	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
+ 	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
++	 * With `sessionStickyOnly` the pre-attribution fallback to the first stored
++	 * credential is suppressed: identity is only reported once a request has
++	 * actually routed (or a pin has bound) the session to an OAuth credential.
+ 	 */
+-	identity(provider: string, sessionId?: string): OAuthAccountIdentity | undefined;
++	identity(
++		provider: string,
++		sessionId?: string,
++		options?: { sessionStickyOnly?: boolean },
++	): OAuthAccountIdentity | undefined;
+ 	/**
+ 	 * Return the configured account policy matching an OAuth identity.
+ 	 *
+@@ -1092,12 +1099,15 @@ export interface SessionsApi {
+ 	 * The durable credential id keeps the pin stable across credential refreshes,
+ 	 * storage reordering, and process restarts. By default this is an explicit
+ 	 * user pin: ranking and account reserve never evict it; hard unavailability
+-	 * and auth retry may still route around it.
++	 * and auth retry may still route around it. An explicit pin also clears any
++	 * reactive rate-limit blocks on the target so the next request actually
++	 * tries it.
+ 	 *
+ 	 * `options.restoredAtMs` instead restores an automatic affinity recorded by a
+ 	 * persisted session, backdated to its last use, so it keeps the provider's
+ 	 * warm-window semantics: a resume inside the prompt-cache TTL reuses the
+-	 * account, a stale resume re-ranks.
++	 * account, a stale resume re-ranks. A restore keeps existing rate-limit
++	 * blocks.
+ 	 */
+ 	pin(provider: string, sessionId: string, credentialId: number, options?: { restoredAtMs?: number }): boolean;
+ 	/**
 diff --git a/packages/ai/src/usage.ts b/packages/ai/src/usage.ts
-index d7f27c2978..0b8895960b 100644
+index 8c2dcf5047..ede7867a79 100644
 --- a/packages/ai/src/usage.ts
 +++ b/packages/ai/src/usage.ts
-@@ -455,6 +455,11 @@ export interface CredentialRankingStrategy {
+@@ -478,6 +478,11 @@ export interface CredentialRankingStrategy {
  	 * not block unrelated families on the same OAuth credential.
  	 */
  	blockScope?(context?: CredentialRankingContext): string | undefined;
@@ -322,12 +454,12 @@ index d7f27c2978..0b8895960b 100644
  	 * Scopes that apply to a request, most specific first. With a context, the
  	 * request's own scope plus any legacy catch-all scope whose blocks still
 diff --git a/packages/ai/src/usage/claude.ts b/packages/ai/src/usage/claude.ts
-index bde0af7acd..6da992e63a 100644
+index ee2c8790c5..104c7b741d 100644
 --- a/packages/ai/src/usage/claude.ts
 +++ b/packages/ai/src/usage/claude.ts
-@@ -932,5 +932,11 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
- 			limits: [...sharedLimits, ...report.limits.filter(limit => limit.scope.tier === tier)],
- 		}));
+@@ -974,5 +974,11 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
+ 			})),
+ 		];
  	},
 +	/**
 +	 * Anthropic weekly windows recover on a fixed schedule: burning down the
@@ -338,10 +470,10 @@ index bde0af7acd..6da992e63a 100644
  	windowDefaults: { primaryMs: 5 * 60 * 60 * 1000, secondaryMs: 7 * 24 * 60 * 60 * 1000 },
  };
 diff --git a/packages/ai/test/auth-storage-account-identity.test.ts b/packages/ai/test/auth-storage-account-identity.test.ts
-index 47022320c8..f1acc1f822 100644
+index 1353b1d37b..2577e3406c 100644
 --- a/packages/ai/test/auth-storage-account-identity.test.ts
 +++ b/packages/ai/test/auth-storage-account-identity.test.ts
-@@ -112,6 +112,45 @@ describe("AuthStorage.getOAuthAccountIdentity", () => {
+@@ -112,6 +112,45 @@ describe("AuthStorage.oauth.identity", () => {
  		expect(rotatedIdentity?.accountId).toBe(retryKey === "access-a" ? "acc-a" : "acc-b");
  	});
  
@@ -349,7 +481,7 @@ index 47022320c8..f1acc1f822 100644
 +		if (!authStorage) throw new Error("test setup failed");
 +		const storage = authStorage;
 +		const sessionId = "session-sticky-only-test";
-+		await storage.set(PROVIDER, [
++		await storage.credentials.set(PROVIDER, [
 +			{
 +				type: "oauth",
 +				access: "access-a",
@@ -375,73 +507,40 @@ index 47022320c8..f1acc1f822 100644
 +
 +		// Before any getApiKey the plain lookup falls back to the first stored
 +		// account, which selection may not pick — sticky-only must stay silent.
-+		expect(storage.getOAuthAccountIdentity(PROVIDER, sessionId)).toBeDefined();
-+		expect(storage.getOAuthAccountIdentity(PROVIDER, sessionId, { sessionStickyOnly: true })).toBeUndefined();
++		expect(storage.oauth.identity(PROVIDER, sessionId)).toBeDefined();
++		expect(storage.oauth.identity(PROVIDER, sessionId, { sessionStickyOnly: true })).toBeUndefined();
 +
-+		const key = await storage.getApiKey(PROVIDER, sessionId);
-+		const sticky = storage.getOAuthAccountIdentity(PROVIDER, sessionId, { sessionStickyOnly: true });
++		const key = await storage.keys.get(PROVIDER, sessionId);
++		const sticky = storage.oauth.identity(PROVIDER, sessionId, { sessionStickyOnly: true });
 +		expect(sticky?.accountId).toBe(key === "access-a" ? "acc-a" : "acc-b");
-+		expect(sticky).toEqual(storage.getOAuthAccountIdentity(PROVIDER, sessionId));
++		expect(sticky).toEqual(storage.oauth.identity(PROVIDER, sessionId));
 +	});
 +
  	test("config override suppresses OAuth identity attribution", async () => {
  		if (!authStorage) throw new Error("test setup failed");
- 		await authStorage.set(PROVIDER, [
+ 		await authStorage.credentials.set(PROVIDER, [
 diff --git a/packages/ai/test/auth-storage-claude-weekly-reset-priority.test.ts b/packages/ai/test/auth-storage-claude-weekly-reset-priority.test.ts
 new file mode 100644
-index 0000000000..fa81156a6e
+index 0000000000..b75dd18d0a
 --- /dev/null
 +++ b/packages/ai/test/auth-storage-claude-weekly-reset-priority.test.ts
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,209 @@
 +import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
++import * as fs from "node:fs/promises";
++import * as os from "node:os";
++import * as path from "node:path";
 +import {
 +	type AuthCredential,
 +	type AuthCredentialStore,
 +	AuthStorage,
-+	type StoredAuthCredential,
++	SqliteAuthCredentialStore,
 +} from "@oh-my-pi/pi-ai/auth-storage";
 +import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 +import * as claudeUsage from "@oh-my-pi/pi-ai/usage/claude";
++import { removeWithRetries } from "../../utils/src/temp";
 +
-+interface ObservableStore extends AuthCredentialStore {
-+	cache: Map<string, { value: string; expiresAtSec: number }>;
-+}
-+
-+function makeStore(rows: StoredAuthCredential[]): ObservableStore {
-+	const cache = new Map<string, { value: string; expiresAtSec: number }>();
++function oauthCredential(id: number, email: string): AuthCredential {
 +	return {
-+		cache,
-+		close() {},
-+		listAuthCredentials() {
-+			return rows;
-+		},
-+		updateAuthCredential() {},
-+		deleteAuthCredential() {},
-+		tryDisableAuthCredentialIfMatches() {
-+			return false;
-+		},
-+		replaceAuthCredentialsForProvider() {
-+			return rows;
-+		},
-+		upsertAuthCredentialForProvider() {
-+			return rows;
-+		},
-+		deleteAuthCredentialsForProvider() {},
-+		getCache(key) {
-+			const entry = cache.get(key);
-+			if (!entry) return null;
-+			if (entry.expiresAtSec * 1000 <= Date.now()) return null;
-+			return entry.value;
-+		},
-+		setCache(key, value, expiresAtSec) {
-+			cache.set(key, { value, expiresAtSec });
-+		},
-+		cleanExpiredCache() {},
-+	};
-+}
-+
-+function oauthRow(id: number, email: string): StoredAuthCredential {
-+	const credential: AuthCredential = {
 +		type: "oauth",
 +		access: `oat-${id}`,
 +		refresh: `refresh-${id}`,
@@ -449,7 +548,6 @@ index 0000000000..fa81156a6e
 +		accountId: `account-${id}`,
 +		email,
 +	};
-+	return { id, provider: "anthropic", credential, disabledCause: null };
 +}
 +
 +function report(
@@ -496,21 +594,33 @@ index 0000000000..fa81156a6e
 +}
 +
 +describe("AuthStorage Claude weekly reset priority", () => {
-+	let store: ObservableStore;
++	let tempDir = "";
++	let store: AuthCredentialStore;
 +	let storage: AuthStorage;
 +
 +	beforeEach(async () => {
-+		store = makeStore([oauthRow(1, "a@example.com"), oauthRow(2, "b@example.com")]);
++		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-claude-weekly-reset-"));
++		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 +		storage = new AuthStorage(store, {
 +			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 +		});
-+		await storage.reload();
++		await storage.credentials.set("anthropic", [
++			oauthCredential(1, "a@example.com"),
++			oauthCredential(2, "b@example.com"),
++		]);
 +	});
 +
-+	afterEach(() => {
-+		storage.close();
++	afterEach(async () => {
 +		vi.restoreAllMocks();
++		storage.close();
++		await removeWithRetries(tempDir);
 +	});
++
++	function credentialIdOf(email: string): number {
++		const account = storage.oauth.accounts("anthropic").find(entry => entry.email === email);
++		if (!account) throw new Error(`expected stored account ${email}`);
++		return account.credentialId;
++	}
 +
 +	it("always prefers the account whose weekly window resets sooner, for every session", async () => {
 +		const now = Date.now();
@@ -522,7 +632,7 @@ index 0000000000..fa81156a6e
 +		});
 +
 +		for (let n = 0; n < 16; n += 1) {
-+			const key = await storage.getApiKey("anthropic", `session-reset-${n}`);
++			const key = await storage.keys.get("anthropic", `session-reset-${n}`);
 +			expect(key).toBe("oat-1");
 +		}
 +	});
@@ -539,7 +649,7 @@ index 0000000000..fa81156a6e
 +			"oat-2": report("b@example.com", { weeklyUsed: 0.1, weeklyResetsAt: now + 6 * 24 * 60 * 60 * 1000 }),
 +		});
 +
-+		const key = await storage.getApiKey("anthropic", "session-exhausted");
++		const key = await storage.keys.get("anthropic", "session-exhausted");
 +
 +		expect(key).toBe("oat-2");
 +	});
@@ -554,7 +664,7 @@ index 0000000000..fa81156a6e
 +		});
 +
 +		for (let n = 0; n < 16; n += 1) {
-+			const key = await storage.getApiKey("anthropic", `session-unknown-${n}`);
++			const key = await storage.keys.get("anthropic", `session-unknown-${n}`);
 +			expect(key).toBe("oat-2");
 +		}
 +	});
@@ -567,13 +677,13 @@ index 0000000000..fa81156a6e
 +			"oat-2": report("b@example.com", { weeklyUsed: 0.3, weeklyResetsAt: resetsAt }),
 +		});
 +
-+		// 17.2.14 ranking is deterministic: resets within the tie tolerance
++		// Ranking is deterministic: resets within the tie tolerance
 +		// (and every downstream metric) leave the candidates equal, so the
 +		// first stored credential wins every session rather than load
 +		// balancing.
 +		const picked = new Set<string>();
 +		for (let n = 0; n < 32; n += 1) {
-+			const key = await storage.getApiKey("anthropic", `session-tie-${n}`);
++			const key = await storage.keys.get("anthropic", `session-tie-${n}`);
 +			if (key) picked.add(key);
 +		}
 +
@@ -590,9 +700,11 @@ index 0000000000..fa81156a6e
 +				"oat-2": report("b@example.com", { weeklyUsed: 0.09, weeklyResetsAt: now + 6 * DAY_MS }),
 +			});
 +			// A session-restored attribution used moments ago: warm, not a manual choice.
-+			expect(storage.pinSessionOAuthAccount("anthropic", "session-warm", 2, { lastUsedAtMs: now })).toBe(true);
++			expect(
++				storage.sessions.pin("anthropic", "session-warm", credentialIdOf("b@example.com"), { restoredAtMs: now }),
++			).toBe(true);
 +
-+			expect(await storage.getApiKey("anthropic", "session-warm")).toBe("oat-1");
++			expect(await storage.keys.get("anthropic", "session-warm")).toBe("oat-1");
 +		});
 +
 +		it("keeps a warm automatic pin when only usage, not the reset order, favours a sibling", async () => {
@@ -602,9 +714,11 @@ index 0000000000..fa81156a6e
 +				"oat-1": report("a@example.com", { weeklyUsed: 0.1, weeklyResetsAt: resetsAt }),
 +				"oat-2": report("b@example.com", { weeklyUsed: 0.5, weeklyResetsAt: resetsAt + 30_000 }),
 +			});
-+			expect(storage.pinSessionOAuthAccount("anthropic", "session-tied", 2, { lastUsedAtMs: now })).toBe(true);
++			expect(
++				storage.sessions.pin("anthropic", "session-tied", credentialIdOf("b@example.com"), { restoredAtMs: now }),
++			).toBe(true);
 +
-+			expect(await storage.getApiKey("anthropic", "session-tied")).toBe("oat-2");
++			expect(await storage.keys.get("anthropic", "session-tied")).toBe("oat-2");
 +		});
 +
 +		it("keeps a manual pin even when a sibling's weekly window resets sooner", async () => {
@@ -613,18 +727,18 @@ index 0000000000..fa81156a6e
 +				"oat-1": report("a@example.com", { weeklyUsed: 0.02, weeklyResetsAt: now + 3 * DAY_MS }),
 +				"oat-2": report("b@example.com", { weeklyUsed: 0.09, weeklyResetsAt: now + 6 * DAY_MS }),
 +			});
-+			expect(storage.pinSessionOAuthAccount("anthropic", "session-manual", 2)).toBe(true);
++			expect(storage.sessions.pin("anthropic", "session-manual", credentialIdOf("b@example.com"))).toBe(true);
 +
-+			expect(await storage.getApiKey("anthropic", "session-manual")).toBe("oat-2");
-+			expect(await storage.getApiKey("anthropic", "session-manual")).toBe("oat-2");
++			expect(await storage.keys.get("anthropic", "session-manual")).toBe("oat-2");
++			expect(await storage.keys.get("anthropic", "session-manual")).toBe("oat-2");
 +		});
 +	});
 +});
 diff --git a/packages/ai/test/auth-storage-codex-selection.test.ts b/packages/ai/test/auth-storage-codex-selection.test.ts
-index 7bbbf9f4e7..bd5094da27 100644
+index ab6f77241a..31c2e5980f 100644
 --- a/packages/ai/test/auth-storage-codex-selection.test.ts
 +++ b/packages/ai/test/auth-storage-codex-selection.test.ts
-@@ -3283,7 +3283,7 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -4071,7 +4071,7 @@ describe("AuthStorage claude oauth ranking", () => {
  		expectExclusivePreference(counts, "api-acct-best", "api-acct-base-b");
  	});
  
@@ -632,8 +746,8 @@ index 7bbbf9f4e7..bd5094da27 100644
 +	test("demotes an account whose 5h window is nearly exhausted despite equal weekly reset", async () => {
  		if (!authStorage) throw new Error("test setup failed");
  
- 		await authStorage.set("anthropic", [
-@@ -3291,15 +3291,16 @@ describe("AuthStorage claude oauth ranking", () => {
+ 		await authStorage.credentials.set("anthropic", [
+@@ -4079,15 +4079,16 @@ describe("AuthStorage claude oauth ranking", () => {
  			{ type: "oauth", ...createCredential("acct-cool", "cool@example.com") },
  		]);
  
@@ -654,7 +768,7 @@ index 7bbbf9f4e7..bd5094da27 100644
  			}),
  		);
  		usageByAccount.set(
-@@ -3373,7 +3374,7 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -4161,7 +4162,7 @@ describe("AuthStorage claude oauth ranking", () => {
  		expect(apiKey).toBe("api-acct-soon");
  	});
  
@@ -662,8 +776,8 @@ index 7bbbf9f4e7..bd5094da27 100644
 +	test("always selects the soonest weekly reset regardless of drain rate", async () => {
  		if (!authStorage) throw new Error("test setup failed");
  
- 		await authStorage.set("anthropic", [
-@@ -3408,8 +3409,9 @@ describe("AuthStorage claude oauth ranking", () => {
+ 		await authStorage.credentials.set("anthropic", [
+@@ -4196,8 +4197,9 @@ describe("AuthStorage claude oauth ranking", () => {
  		);
  
  		const counts = await countApiKeySelections(authStorage, "anthropic", "weighted-claude-three");
@@ -677,10 +791,10 @@ index 7bbbf9f4e7..bd5094da27 100644
  	test("selects the account with lower Fable weekly usage for Claude Fable requests", async () => {
 diff --git a/packages/ai/test/auth-storage-pin-credential.test.ts b/packages/ai/test/auth-storage-pin-credential.test.ts
 new file mode 100644
-index 0000000000..012f2f549c
+index 0000000000..ae4cf15529
 --- /dev/null
 +++ b/packages/ai/test/auth-storage-pin-credential.test.ts
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,132 @@
 +import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 +import * as fs from "node:fs/promises";
 +import * as os from "node:os";
@@ -691,7 +805,7 @@ index 0000000000..012f2f549c
 +
 +const PROVIDER = "unit-oauth-pin";
 +
-+describe("AuthStorage.pinSessionOAuthAccount block clearing", () => {
++describe("AuthStorage.sessions.pin block clearing", () => {
 +	let tempDir = "";
 +	let store: AuthCredentialStore | null = null;
 +	let authStorage: AuthStorage | null = null;
@@ -714,7 +828,7 @@ index 0000000000..012f2f549c
 +	});
 +
 +	async function seedTwoAccounts(storage: AuthStorage): Promise<void> {
-+		await storage.set(PROVIDER, [
++		await storage.credentials.set(PROVIDER, [
 +			{
 +				type: "oauth",
 +				access: "access-a",
@@ -748,11 +862,11 @@ index 0000000000..012f2f549c
 +	/** Route a throwaway session to whichever account wins, then rate-limit-block it. */
 +	async function blockFirstPick(storage: AuthStorage): Promise<BlockedSetup> {
 +		const blockSession = "session-pin-block-setup";
-+		const blockedKey = await storage.getApiKey(PROVIDER, blockSession);
++		const blockedKey = await storage.keys.get(PROVIDER, blockSession);
 +		if (blockedKey !== "access-a" && blockedKey !== "access-b") throw new Error("expected a stored access token");
-+		await storage.markUsageLimitReached(PROVIDER, blockSession, { retryAfterMs: 60 * 60_000 });
++		await storage.limits.markReached(PROVIDER, blockSession, { retryAfterMs: 60 * 60_000 });
 +		const blockedEmail = blockedKey === "access-a" ? "a@example.com" : "b@example.com";
-+		const blocked = storage.listOAuthAccounts(PROVIDER).find(account => account.email === blockedEmail);
++		const blocked = storage.oauth.accounts(PROVIDER).find(account => account.email === blockedEmail);
 +		if (!blocked) throw new Error("expected the blocked account to be stored");
 +		return {
 +			blockedId: blocked.credentialId,
@@ -767,15 +881,13 @@ index 0000000000..012f2f549c
 +		const sessionId = "session-pin-fresh";
 +		await seedTwoAccounts(storage);
 +
-+		const target = storage.listOAuthAccounts(PROVIDER).find(account => account.email === "b@example.com");
++		const target = storage.oauth.accounts(PROVIDER).find(account => account.email === "b@example.com");
 +		if (!target) throw new Error("expected stored account b");
 +
-+		expect(storage.pinSessionOAuthAccount(PROVIDER, sessionId, target.credentialId)).toBe(true);
-+		expect(storage.getOAuthAccountIdentity(PROVIDER, sessionId, { sessionStickyOnly: true })?.email).toBe(
-+			"b@example.com",
-+		);
++		expect(storage.sessions.pin(PROVIDER, sessionId, target.credentialId)).toBe(true);
++		expect(storage.oauth.identity(PROVIDER, sessionId, { sessionStickyOnly: true })?.email).toBe("b@example.com");
 +
-+		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-b");
++		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-b");
 +	});
 +
 +	test("rejects credential ids that do not name a stored OAuth credential", async () => {
@@ -784,8 +896,8 @@ index 0000000000..012f2f549c
 +		const sessionId = "session-pin-invalid";
 +		await seedTwoAccounts(storage);
 +
-+		expect(storage.pinSessionOAuthAccount(PROVIDER, sessionId, 999_999)).toBe(false);
-+		expect(storage.getOAuthAccountIdentity(PROVIDER, sessionId, { sessionStickyOnly: true })).toBeUndefined();
++		expect(storage.sessions.pin(PROVIDER, sessionId, 999_999)).toBe(false);
++		expect(storage.oauth.identity(PROVIDER, sessionId, { sessionStickyOnly: true })).toBeUndefined();
 +	});
 +
 +	test("a manual pin clears rate-limit blocks so the next request tries the account", async () => {
@@ -795,12 +907,12 @@ index 0000000000..012f2f549c
 +		const setup = await blockFirstPick(storage);
 +
 +		// Blocked: a fresh session rotates away from the blocked account.
-+		expect(await storage.getApiKey(PROVIDER, "session-pin-rotated")).toBe(setup.otherAccess);
++		expect(await storage.keys.get(PROVIDER, "session-pin-rotated")).toBe(setup.otherAccess);
 +
 +		const sessionId = "session-pin-unblock";
-+		expect(storage.pinSessionOAuthAccount(PROVIDER, sessionId, setup.blockedId)).toBe(true);
++		expect(storage.sessions.pin(PROVIDER, sessionId, setup.blockedId)).toBe(true);
 +		// The manual pin cleared the block, so the pinned account serves.
-+		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe(setup.blockedAccess);
++		expect(await storage.keys.get(PROVIDER, sessionId)).toBe(setup.blockedAccess);
 +	});
 +
 +	test("a persisted-session restore keeps rate-limit blocks in place", async () => {
@@ -810,10 +922,8 @@ index 0000000000..012f2f549c
 +		const setup = await blockFirstPick(storage);
 +
 +		const sessionId = "session-pin-restore";
-+		expect(storage.pinSessionOAuthAccount(PROVIDER, sessionId, setup.blockedId, { lastUsedAtMs: Date.now() })).toBe(
-+			true,
-+		);
++		expect(storage.sessions.pin(PROVIDER, sessionId, setup.blockedId, { restoredAtMs: Date.now() })).toBe(true);
 +		// Restore must not lift the block: selection routes around the account.
-+		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe(setup.otherAccess);
++		expect(await storage.keys.get(PROVIDER, sessionId)).toBe(setup.otherAccess);
 +	});
 +});

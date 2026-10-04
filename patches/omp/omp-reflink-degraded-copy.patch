@@ -21,11 +21,15 @@ libpi_natives.so and the regenerated index.d.ts (iso_start gains a 4th
 omp-isolation-require-cow.patch.
 
 What must survive a rebase:
-- clone_file: on FICLONE failure with EXDEV|EOPNOTSUPP|ENOTTY|EINVAL|
-  ENOSYS and require_cow == false, fall through to std::io::copy on the
-  ALREADY-OPEN fds (both at offset 0) instead of erroring; any other
-  errno, or require_cow == true, keeps the original error path
-  (IsoError::unavailable via map_clone_error, dst unlinked).
+- clone_file: when cow::clone_file fails with an error
+  cow::is_unsupported() recognizes (EXDEV|EOPNOTSUPP|ENOTTY|EINVAL|ENOSYS,
+  cross-device, ErrorKind::Unsupported) and require_cow == false, fall
+  through to fs::copy instead of erroring; any other error, or
+  require_cow == true, keeps the original error path
+  (IsoError::unavailable via map_clone_error; cow::clone_file already
+  left no dst behind).
+- clone_tree (worktree clones) passes require_cow = true: upstream's
+  plain-checkout fallback stays in charge there.
 - preserve_permissions/set_times_nofollow still run after the copy path
   — mode and mtimes must match the clone path.
 - pi_iso::StartOptions { require_cow } + IsolationBackend::start_with
@@ -49,11 +53,18 @@ What must survive a rebase:
   Linux host. Tests never assert WHICH path ran on ambient filesystems
   — only content equality and error class.
 
+Rebased 18.2.10 -> 18.6.0: upstream moved per-file cloning into the
+shared crates/pi-iso/src/cow.rs (cow::clone_file / cow::is_unsupported,
+also used by the shell's cp). linux_reflink's clone_file no longer owns
+the fds or the FICLONE ioctl, so the degradation now wraps
+cow::clone_file and byte-copies with fs::copy; the test FICLONE probe
+uses cow::clone_file too.
+
 diff --git a/crates/pi-iso/src/lib.rs b/crates/pi-iso/src/lib.rs
-index 730019ddfb..a4a67b1422 100644
+index 51cae6432b..e8f808ff1f 100644
 --- a/crates/pi-iso/src/lib.rs
 +++ b/crates/pi-iso/src/lib.rs
-@@ -173,6 +173,18 @@ impl ProbeResult {
+@@ -175,6 +175,18 @@ impl ProbeResult {
  	}
  }
  
@@ -72,7 +83,7 @@ index 730019ddfb..a4a67b1422 100644
  /// Error returned by every backend operation.
  ///
  /// `Unavailable` is the only variant callers are expected to treat specially —
-@@ -250,6 +262,14 @@ pub trait IsolationBackend: Send + Sync {
+@@ -252,6 +264,14 @@ pub trait IsolationBackend: Send + Sync {
  
  	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()>;
  
@@ -88,13 +99,13 @@ index 730019ddfb..a4a67b1422 100644
  	/// entries.
  	fn clone_tree(
 diff --git a/crates/pi-iso/src/linux_reflink.rs b/crates/pi-iso/src/linux_reflink.rs
-index be4a2274df..10e1dd6cbe 100644
+index 1f575f6bbc..2b03a5fde7 100644
 --- a/crates/pi-iso/src/linux_reflink.rs
 +++ b/crates/pi-iso/src/linux_reflink.rs
-@@ -3,9 +3,12 @@
- //! This backend recursively builds a writable directory tree at `merged` from
+@@ -4,9 +4,12 @@
  //! `lower`. Directories and symlinks are recreated, while regular files are
- //! cloned with the Linux `FICLONE` ioctl so filesystems such as btrfs, XFS,
+ //! cloned with [`cow::clone_file`](crate::cow::clone_file) (the Linux
+ //! `FICLONE` ioctl) so filesystems such as btrfs, XFS,
 -//! OCFS2, and bcachefs can share extents until either side is modified. There
 -//! is no mount or kernel state to undo, so [`stop`](IsolationBackend::stop) is
 -//! a recursive remove.
@@ -107,7 +118,7 @@ index be4a2274df..10e1dd6cbe 100644
  
  use std::path::Path;
  
-@@ -13,7 +16,7 @@ use async_trait::async_trait;
+@@ -14,7 +17,7 @@ use async_trait::async_trait;
  
  #[cfg(not(target_os = "linux"))]
  use crate::IsoError;
@@ -116,7 +127,7 @@ index be4a2274df..10e1dd6cbe 100644
  
  pub struct LinuxReflinkBackend;
  
-@@ -39,13 +42,17 @@ impl IsolationBackend for LinuxReflinkBackend {
+@@ -40,13 +43,17 @@ impl IsolationBackend for LinuxReflinkBackend {
  	}
  
  	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()> {
@@ -136,9 +147,9 @@ index be4a2274df..10e1dd6cbe 100644
  			Err(IsoError::unavailable("Linux FICLONE reflink isolation is only available on Linux"))
  		}
  	}
-@@ -96,11 +103,11 @@ mod imp {
- 	// both.
- 	const FICLONE: libc::Ioctl = 0x4004_9409;
+@@ -90,11 +97,11 @@ mod imp {
+ 
+ 	use crate::{IsoError, IsoResult, cow};
  
 -	pub fn start(lower: &Path, merged: &Path) -> IsoResult<()> {
 +	pub fn start(lower: &Path, merged: &Path, require_cow: bool) -> IsoResult<()> {
@@ -150,7 +161,7 @@ index be4a2274df..10e1dd6cbe 100644
  		if result.is_err() {
  			let _ = fs::remove_dir_all(merged);
  		}
-@@ -110,7 +117,10 @@ mod imp {
+@@ -104,7 +111,10 @@ mod imp {
  	pub fn clone_tree(lower: &Path, merged: &Path, skip: &[&std::ffi::OsStr]) -> IsoResult<()> {
  		let lower = canonical_existing_dir(lower)?;
  		prepare_destination(merged)?;
@@ -162,7 +173,7 @@ index be4a2274df..10e1dd6cbe 100644
  		if result.is_err() {
  			let _ = fs::remove_dir_all(merged);
  		}
-@@ -180,6 +190,7 @@ mod imp {
+@@ -174,6 +184,7 @@ mod imp {
  		src: &Path,
  		dst: &Path,
  		skip: Option<&[&std::ffi::OsStr]>,
@@ -170,7 +181,7 @@ index be4a2274df..10e1dd6cbe 100644
  	) -> IsoResult<()> {
  		let meta = fs::symlink_metadata(src)
  			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
-@@ -202,9 +213,9 @@ mod imp {
+@@ -196,9 +207,9 @@ mod imp {
  			if file_type.is_symlink() {
  				clone_symlink(&src_path, &dst_path)?;
  			} else if file_type.is_dir() {
@@ -182,7 +193,7 @@ index be4a2274df..10e1dd6cbe 100644
  			} else {
  				return Err(IsoError::other(format!(
  					"unsupported file type in reflink source: {}",
-@@ -229,7 +240,7 @@ mod imp {
+@@ -223,10 +234,23 @@ mod imp {
  		Ok(())
  	}
  
@@ -190,55 +201,25 @@ index be4a2274df..10e1dd6cbe 100644
 +	fn clone_file(src: &Path, dst: &Path, require_cow: bool) -> IsoResult<()> {
  		let meta = fs::symlink_metadata(src)
  			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
- 		let src_file = File::open(src)
-@@ -245,8 +256,23 @@ mod imp {
- 		let rc = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
- 		if rc != 0 {
- 			let err = std::io::Error::last_os_error();
--			let _ = fs::remove_file(dst);
--			return Err(map_clone_error(src, dst, err));
-+			if require_cow || !cow_unsupported(&err) {
-+				let _ = fs::remove_file(dst);
-+				return Err(map_clone_error(src, dst, err));
+-		cow::clone_file(src, dst).map_err(|err| map_clone_error(src, dst, &err))?;
++		if let Err(err) = cow::clone_file(src, dst) {
++			if require_cow || !cow::is_unsupported(&err) {
++				return Err(map_clone_error(src, dst, &err));
 +			}
 +			// The filesystem cannot clone extents (ext4, tmpfs, ...). Degrade
 +			// to a plain byte copy: the snapshot's file set, freeze and capture
-+			// semantics are identical — only the storage cost grows. Both fds
-+			// are still at offset 0; `std::io::copy` uses in-kernel
++			// semantics are identical — only the storage cost grows.
++			// `cow::clone_file` left no `dst` behind; `fs::copy` uses in-kernel
 +			// copy_file_range/sendfile where available.
-+			std::io::copy(&mut &src_file, &mut &dst_file).map_err(|copy_err| {
++			fs::copy(src, dst).map_err(|copy_err| {
 +				let _ = fs::remove_file(dst);
-+				IsoError::other(format!(
-+					"copy {} -> {}: {copy_err}",
-+					src.display(),
-+					dst.display()
-+				))
++				IsoError::other(format!("copy {} -> {}: {copy_err}", src.display(), dst.display()))
 +			})?;
- 		}
- 
++		}
  		preserve_permissions(dst, &meta)?;
-@@ -254,12 +280,15 @@ mod imp {
+ 		let _ = set_times_nofollow(dst, &meta);
  		Ok(())
- 	}
- 
-+	fn cow_unsupported(err: &std::io::Error) -> bool {
-+		matches!(
-+			err.raw_os_error(),
-+			Some(libc::EXDEV | libc::EOPNOTSUPP | libc::ENOTTY | libc::EINVAL | libc::ENOSYS)
-+		)
-+	}
-+
- 	fn map_clone_error(src: &Path, dst: &Path, err: std::io::Error) -> IsoError {
--		if let Some(code) = err.raw_os_error()
--			&& matches!(
--				code,
--				libc::EXDEV | libc::EOPNOTSUPP | libc::ENOTTY | libc::EINVAL | libc::ENOSYS
--			) {
-+		if cow_unsupported(&err) {
- 			return IsoError::unavailable(format!(
- 				"FICLONE unsupported for {} -> {}: {err}",
- 				src.display(),
-@@ -294,3 +323,134 @@ mod imp {
+@@ -268,3 +292,129 @@ mod imp {
  		}
  	}
  }
@@ -247,13 +228,11 @@ index be4a2274df..10e1dd6cbe 100644
 +mod tests {
 +	use std::{
 +		fs,
-+		os::fd::AsRawFd,
 +		path::{Path, PathBuf},
 +	};
 +
 +	use super::imp;
-+
-+	const FICLONE: libc::Ioctl = 0x4004_9409;
++	use crate::cow;
 +
 +	/// Fresh scratch directory under the OS temp dir (tmpfs on most Linux
 +	/// hosts — a filesystem without FICLONE, which is the degradation case
@@ -271,13 +250,10 @@ index be4a2274df..10e1dd6cbe 100644
 +		// Non-empty source: cloning a zero-length file is degenerate and can
 +		// fail (EINVAL) even on filesystems whose extent cloning works.
 +		fs::write(dir.join("probe-src"), b"probe").unwrap();
-+		let src = fs::File::open(dir.join("probe-src")).unwrap();
-+		let dst = fs::File::create(dir.join("probe-dst")).unwrap();
-+		// SAFETY: both fds are valid for the duration of the call.
-+		let rc = unsafe { libc::ioctl(dst.as_raw_fd(), FICLONE, src.as_raw_fd()) };
++		let ok = cow::clone_file(&dir.join("probe-src"), &dir.join("probe-dst")).is_ok();
 +		let _ = fs::remove_file(dir.join("probe-src"));
 +		let _ = fs::remove_file(dir.join("probe-dst"));
-+		rc == 0
++		ok
 +	}
 +
 +	fn build_lower(dir: &Path) -> PathBuf {
@@ -441,10 +417,10 @@ index 3a962aa9ac..130ff2e1cc 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index 2693f62ff4..e6160ca193 100644
+index bdefedbbd7..5a1a32ca4e 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -1953,9 +1953,20 @@ export interface IsoResolveResult {
+@@ -2088,9 +2088,20 @@ export interface IsoResolveResult {
  
  /**
   * Materialise `merged` as a writable view of `lower` using the requested

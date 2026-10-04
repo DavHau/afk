@@ -19,15 +19,25 @@ itself survive until the host changes that same key. The first request
 owned by the per-request `env` patch.
 
 What must survive a rebase:
-- procmgr.buildSpawnEnv exported and still built from live Bun.env.
+- procmgr.buildSpawnEnv exported; the kernel calls it with live=true so it
+  is built from live Bun.env, never from refreshShellConfigCache's capture.
 - PythonKernel's constructor takes the hostEnv thunk; start() builds it
   from the resolved runtime and the configured shell.
 - runner.py applies hostEnv in _apply_request_runtime BEFORE the managed
   env patch.
 - JS eval workers are not covered (they snapshot env at worker creation).
 
+Rebased 18.2.10 -> 18.6.0: upstream procmgr now serves spawn envs from a
+capture taken by refreshShellConfigCache() (called on main-agent session
+identity events) instead of a once-per-process cached config; buildSpawnEnv
+prefers that capture. A capture is still a snapshot, so buildSpawnEnv gained
+an optional `live` flag (default false: upstream behaviour) that bypasses
+the capture while keeping upstream's dotenv filtering (spawnEnvProjectDir);
+the kernel's hostEnv thunk passes live=true. kernel.ts, runner.py and
+runtime.ts hunks only moved (runner.py +69 lines).
+
 diff --git a/packages/coding-agent/src/eval/py/kernel.ts b/packages/coding-agent/src/eval/py/kernel.ts
-index a0fb33b24e..a5bcc04b08 100644
+index a0fb33b24e..849ba9ec82 100644
 --- a/packages/coding-agent/src/eval/py/kernel.ts
 +++ b/packages/coding-agent/src/eval/py/kernel.ts
 @@ -8,7 +8,7 @@
@@ -77,13 +87,13 @@ index a0fb33b24e..a5bcc04b08 100644
 +		const hostRuntime = runtime;
 +		const shell = (await Settings.init()).getShellConfig().shell;
 +		const kernel = new PythonKernel(Snowflake.next(), () =>
-+			hostKernelEnv(hostRuntime, procmgr.buildSpawnEnv(shell)),
++			hostKernelEnv(hostRuntime, procmgr.buildSpawnEnv(shell, true)),
 +		);
  
  		const proc = Bun.spawn([runtime.pythonPath, "-u", scriptPath], {
  			cwd: options.cwd,
 diff --git a/packages/coding-agent/src/eval/py/runner.py b/packages/coding-agent/src/eval/py/runner.py
-index 259624aeec..fa7c738d02 100644
+index f1f83594bf..2f9be9e584 100644
 --- a/packages/coding-agent/src/eval/py/runner.py
 +++ b/packages/coding-agent/src/eval/py/runner.py
 @@ -5,7 +5,7 @@ wrapper writes typed frames back.
@@ -95,7 +105,7 @@ index 259624aeec..fa7c738d02 100644
    {"type": "tool", "id": str, "op": "describe", "names": [str]}
    {"type": "tool", "id": str, "op": "call", "name": str, "args": dict}
    {"type": "exit"}                                # graceful shutdown
-@@ -1961,6 +1961,33 @@ _MANAGED_ENV_KEYS = (
+@@ -2030,6 +2030,33 @@ _MANAGED_ENV_KEYS = (
      "PI_EVAL_LOCAL_ROOTS",
  )
  
@@ -129,7 +139,7 @@ index 259624aeec..fa7c738d02 100644
  
  def _apply_request_runtime(req: dict) -> None:
      cwd = req.get("cwd")
-@@ -1972,6 +1999,10 @@ def _apply_request_runtime(req: dict) -> None:
+@@ -2041,6 +2068,10 @@ def _apply_request_runtime(req: dict) -> None:
              pass
          sys.path.insert(0, cwd)
  
@@ -141,7 +151,7 @@ index 259624aeec..fa7c738d02 100644
      if isinstance(env, dict):
          for key in _MANAGED_ENV_KEYS:
 diff --git a/packages/coding-agent/src/eval/py/runtime.ts b/packages/coding-agent/src/eval/py/runtime.ts
-index 367c9444ac..b6d30e5833 100644
+index 2309bf0bf4..e066159025 100644
 --- a/packages/coding-agent/src/eval/py/runtime.ts
 +++ b/packages/coding-agent/src/eval/py/runtime.ts
 @@ -183,6 +183,23 @@ function venvBinDir(venvPath: string): string {
@@ -169,19 +179,26 @@ index 367c9444ac..b6d30e5833 100644
  	const binDir = path.dirname(pythonPath);
  	const venvPath = path.dirname(binDir);
 diff --git a/packages/utils/src/procmgr.ts b/packages/utils/src/procmgr.ts
-index 7527d4cfd1..7bb99ba554 100644
+index a5f514ba11..b5edea3c1a 100644
 --- a/packages/utils/src/procmgr.ts
 +++ b/packages/utils/src/procmgr.ts
-@@ -23,9 +23,10 @@ export interface ShellConfigOptions {
- let cachedShellConfig: ShellConfig | null = null;
+@@ -38,13 +38,16 @@ let capturedChildShellEnv: Record<string, string> | undefined;
+ let spawnEnvProjectDir: string | undefined;
  
  /**
 - * Build the spawn environment (cached).
-+ * Build the spawn environment from live `Bun.env`. `getShellConfig` caches
-+ * one result; afk's eval kernel env sync calls this directly per request.
++ * Build the spawn environment: from the {@link refreshShellConfigCache} capture
++ * when one exists, else from live `Bun.env`. `live` always builds from live
++ * `Bun.env`; afk's eval kernel env sync calls it that way per request, so
++ * mid-session `process.env` changes (direnv reloads) reach a retained kernel.
   */
 -function buildSpawnEnv(shell: string): Record<string, string> {
-+export function buildSpawnEnv(shell: string): Record<string, string> {
++export function buildSpawnEnv(shell: string, live = false): Record<string, string> {
  	const noCI = $env.PI_BASH_NO_CI || $env.CLAUDE_BASH_NO_CI;
+ 	spawnEnvProjectDir ??= getProjectDir();
  	return {
- 		...filterChildShellEnv(Bun.env),
+-		...(capturedChildShellEnv ?? filterChildShellEnv(Bun.env, spawnEnvProjectDir)),
++		...((live ? undefined : capturedChildShellEnv) ?? filterChildShellEnv(Bun.env, spawnEnvProjectDir)),
+ 		SHELL: shell,
+ 		GIT_EDITOR: "true",
+ 		GPG_TTY: "not a tty",

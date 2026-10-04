@@ -9,15 +9,30 @@ sections now validate against the property schema and splat into the
 section; the tool description says so.
 
 What must survive a rebase:
-- output-schema-validator.ts: the per-section validator for an
-  array-typed property accepts the full array (validated against the
-  property schema) as well as one element.
+- output-schema-validator.ts: the per-section validator (and the
+  per-section strict-null normalizer) for an array-typed property
+  accepts the full array (checked against the property schema) as well
+  as one element (items schema).
 - The section assembler splats an array payload for array-valued labels
   instead of nesting it. Since 18.2.x that assembler lives in
-  packages/tui/src/tools/task-yield-assembly.ts (appendYieldSection);
-  coding-agent's task/yield-assembly.ts only computes arrayValuedLabels.
+  packages/tui/src/tools/task-yield-assembly.ts (appendYieldSection,
+  shape "array"); coding-agent's task/yield-assembly.ts only computes
+  the label shapes (yieldSectionShapes since 18.6.0).
 - Regression test in test/tools/yield.test.ts (whole-array accept,
   invalid element still rejected per call, splat + append on assembly).
+
+Rebased 18.2.10 -> 18.6.0: upstream still validates array sections
+per element and still nests array payloads, so the patch stays.
+Upstream split section-schema derivation into buildSectionSchemas (now
+also feeding the new strict-null normalizeSection) and replaced the
+assembler's boolean `forceArray`/arrayValuedLabels with
+YieldSectionShapes ("array" | "scalar") / yieldSectionShapes(). Re-cut:
+buildSectionSchemas keeps both the items schema and the whole property
+schema for array properties, and one selector (sectionSchemaFor) picks
+the property schema for array payloads in BOTH the section validator and
+normalizeSection, so whole-array payloads also get strict-null
+normalization. appendYieldSection splats array payloads when the shape is
+"array". The regression test uses yieldSectionShapes.
 
 diff --git a/packages/coding-agent/src/prompts/tools/yield.md b/packages/coding-agent/src/prompts/tools/yield.md
 index 2f5df15048..ec8425b789 100644
@@ -33,52 +48,102 @@ index 2f5df15048..ec8425b789 100644
  {{#unless workPoolItems}}
  {{#if hasOutputSchema}}
 diff --git a/packages/coding-agent/src/tools/output-schema-validator.ts b/packages/coding-agent/src/tools/output-schema-validator.ts
-index f09b469c95..b27482b837 100644
+index 863655fc63..e47bc18db2 100644
 --- a/packages/coding-agent/src/tools/output-schema-validator.ts
 +++ b/packages/coding-agent/src/tools/output-schema-validator.ts
-@@ -110,10 +110,12 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
-  * Build per-top-level-property validators for incremental yields.
-  *
-  * Each entry validates the `data` payload of one `type: ["<label>"]` section against the
-- * matching property's sub-schema — array-typed properties (e.g. `findings`, derived from JTD
-- * `elements`) use the items schema since each yield contributes one element, while scalar
-- * properties use the property schema directly. Closed top-level schemas reject labels that are
-- * not declared as properties.
-+ * matching property's sub-schema. Array-typed properties (e.g. `findings`, derived from JTD
-+ * `elements`) accept either shape the tool's parameter schema advertises: a single element
-+ * (validated against the items schema) or the whole section array (validated against the
-+ * property schema) — array payloads are always read as section content, never as one element.
-+ * Scalar properties use the property schema directly. Closed top-level schemas reject labels
-+ * that are not declared as properties.
-  */
- function buildSectionValidators(
- 	jsonSchema: Record<string, unknown>,
-@@ -124,11 +126,16 @@ function buildSectionValidators(
- 	for (const label in properties) {
- 		const raw = properties[label];
- 		const propRecord = isRecord(raw) ? raw : undefined;
--		const sectionSchema =
-+		const itemsSchema =
- 			propRecord?.type === "array" && propRecord.items !== undefined && propRecord.items !== null
- 				? propRecord.items
--				: raw;
--		validators.set(label, value => validateJsonSchemaValue(sectionSchema, value));
-+				: undefined;
-+		const sectionSchema = itemsSchema ?? raw;
-+		validators.set(label, value =>
-+			itemsSchema !== undefined && Array.isArray(value)
-+				? validateJsonSchemaValue(raw, value)
-+				: validateJsonSchemaValue(sectionSchema, value),
-+		);
+@@ -23,15 +23,17 @@ export interface OutputValidator {
+ 	validate(value: unknown): JsonSchemaValidationResult;
+ 	/** Treat strict-provider nulls for optional non-nullable properties as omitted before validation and delivery. */
+ 	normalize(value: unknown): unknown;
+-	/** Apply the same normalization to one incremental section (array sections carry one item). */
++	/** Apply the same normalization to one incremental section (one item, or a whole array for array sections). */
+ 	normalizeSection(label: string, value: unknown): unknown;
+ 	/** Top-level required property names. Empty if the schema has no `required` array at root. */
+ 	readonly requiredFields: readonly string[];
+ 	/**
+ 	 * Per-label validators for incremental yields (`type: ["<label>"]`). Each entry validates the
+-	 * `data` payload of a single section against the matching top-level property's sub-schema —
+-	 * array-typed properties (e.g. `findings`) use the items schema since each yield contributes
+-	 * one element, while scalar properties use the property schema directly.
++	 * `data` payload of a single section against the matching top-level property's sub-schema.
++	 * Array-typed properties (e.g. `findings`) accept either shape the tool's parameter schema
++	 * advertises: one element (items schema) or the whole section array (property schema) —
++	 * an array payload is always read as section content, never as one element. Scalar
++	 * properties use the property schema directly.
+ 	 */
+ 	readonly validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
+ 	/** Whether top-level schema closure makes unknown incremental yield labels invalid. */
+@@ -98,8 +100,8 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
+ 	const sectionLabels = buildSectionLabelMetadata(labelSchema);
+ 	const sectionSchemas = buildSectionSchemas(labelSchema);
+ 	const sectionValidators = new Map<string, (value: unknown) => JsonSchemaValidationResult>();
+-	for (const [label, sectionSchema] of sectionSchemas) {
+-		sectionValidators.set(label, value => validateJsonSchemaValue(sectionSchema, value));
++	for (const [label, section] of sectionSchemas) {
++		sectionValidators.set(label, value => validateJsonSchemaValue(sectionSchemaFor(section, value), value));
  	}
- 	return validators;
+ 	return {
+ 		normalized,
+@@ -108,7 +110,8 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
+ 			requiredFields: required,
+ 			validate: value => validateJsonSchemaValue(jsonSchemaRecord, value),
+ 			normalize: value => normalizeStrictOutput(value, labelSchema),
+-			normalizeSection: (label, value) => normalizeStrictOutput(value, sectionSchemas.get(label)),
++			normalizeSection: (label, value) =>
++				normalizeStrictOutput(value, sectionSchemaFor(sectionSchemas.get(label), value)),
+ 			validateSection: sectionValidators,
+ 			rejectUnknownSections: sectionLabels.rejectUnknownSections,
+ 			knownSectionLabels: sectionLabels.labels,
+@@ -117,9 +120,19 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
+ 	};
  }
+ 
+-/** Derive the schema for each incremental section, selecting array items when the section submits one element. */
+-function buildSectionSchemas(jsonSchema: Record<string, unknown>): ReadonlyMap<string, unknown> {
+-	const schemas = new Map<string, unknown>();
++/**
++ * Schemas for one incremental section: `item` validates a single submitted value (the items
++ * schema for array-typed properties); array-typed properties also keep the `whole` property
++ * schema for whole-array payloads.
++ */
++interface SectionSchema {
++	readonly item: unknown;
++	readonly whole?: unknown;
++}
++
++/** Derive the schemas for each incremental section, keeping both element and whole-array shapes for array properties. */
++function buildSectionSchemas(jsonSchema: Record<string, unknown>): ReadonlyMap<string, SectionSchema> {
++	const schemas = new Map<string, SectionSchema>();
+ 	const properties = jsonSchema.properties;
+ 	if (!isRecord(properties)) return schemas;
+ 	for (const label in properties) {
+@@ -128,13 +141,18 @@ function buildSectionSchemas(jsonSchema: Record<string, unknown>): ReadonlyMap<s
+ 		schemas.set(
+ 			label,
+ 			propRecord?.type === "array" && propRecord.items !== undefined && propRecord.items !== null
+-				? propRecord.items
+-				: raw,
++				? { item: propRecord.items, whole: raw }
++				: { item: raw },
+ 		);
+ 	}
+ 	return schemas;
+ }
+ 
++/** Pick the schema a section payload is checked against: arrays submitted to array-typed sections are the whole section. */
++function sectionSchemaFor(section: SectionSchema | undefined, value: unknown): unknown {
++	return section?.whole !== undefined && Array.isArray(value) ? section.whole : section?.item;
++}
++
+ // Remove provider-injected nulls only when the declared property schema rejects null.
+ function normalizeStrictOutput(value: unknown, schema: unknown): unknown {
+ 	if (!isRecord(schema)) return value;
 diff --git a/packages/coding-agent/test/tools/output-schema-validator.test.ts b/packages/coding-agent/test/tools/output-schema-validator.test.ts
-index a89b50c8bc..6a78059664 100644
+index 8a82e1180f..e9a0b95958 100644
 --- a/packages/coding-agent/test/tools/output-schema-validator.test.ts
 +++ b/packages/coding-agent/test/tools/output-schema-validator.test.ts
-@@ -70,7 +70,7 @@ describe("buildOutputValidator", () => {
- 		]);
+@@ -82,7 +82,7 @@ describe("buildOutputValidator", () => {
+ 		expect(validator?.validate({ name: null, receipt: null }).success).toBe(false);
  	});
  
 -	it("exposes per-label sub-validators that accept items (not whole arrays) for elements properties", () => {
@@ -86,7 +151,7 @@ index a89b50c8bc..6a78059664 100644
  		const { validator } = buildOutputValidator({
  			properties: {
  				overall_correctness: { enum: ["correct", "incorrect"] },
-@@ -93,9 +93,11 @@ describe("buildOutputValidator", () => {
+@@ -105,9 +105,11 @@ describe("buildOutputValidator", () => {
  		// String property: any string passes, non-strings fail.
  		expect(sections?.get("explanation")?.("ok").success).toBe(true);
  		expect(sections?.get("explanation")?.(123).success).toBe(false);
@@ -101,10 +166,10 @@ index a89b50c8bc..6a78059664 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index ee31b37da8..2eab417af5 100644
+index 0c80ef63d2..b103962b86 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
-@@ -446,6 +446,55 @@ describe("YieldTool", () => {
+@@ -440,6 +440,55 @@ describe("YieldTool", () => {
  		).rejects.toThrow(/Section "findings" does not match schema.*body/);
  	});
  
@@ -152,7 +217,7 @@ index ee31b37da8..2eab417af5 100644
 +				{ status: "success", type: ["findings"], data: third },
 +			] as never,
 +			undefined,
-+			arrayValuedLabels(outputSchema),
++			yieldSectionShapes(outputSchema),
 +		);
 +		expect(assembled?.data).toEqual({ findings: [first, second, third] });
 +	});
@@ -161,20 +226,22 @@ index ee31b37da8..2eab417af5 100644
  		// Open JSON Schema output contracts can still use scratchpad/streaming
  		// sections that the agent invents at runtime, so unknown labels stay loose.
 diff --git a/packages/tui/src/tools/task-yield-assembly.ts b/packages/tui/src/tools/task-yield-assembly.ts
-index 0f0405f519..fedaccd41f 100644
+index a1947068b0..cccb2d4137 100644
 --- a/packages/tui/src/tools/task-yield-assembly.ts
 +++ b/packages/tui/src/tools/task-yield-assembly.ts
-@@ -56,12 +56,16 @@ function appendYieldSection(
+@@ -65,14 +65,18 @@ function appendYieldSection(
  ): void {
  	const count = sectionCounts.get(label) ?? 0;
  	const existing = sections[label];
 +	// For array-valued labels an array payload IS the section content (the yield
 +	// tool validates it against the whole property schema), so splat its elements
 +	// instead of nesting the array as a single element.
-+	const values = forceArray && Array.isArray(value) ? value : [value];
- 	if (count === 0) {
--		sections[label] = forceArray ? [value] : value;
-+		sections[label] = forceArray ? [...values] : value;
++	const values = shape === "array" && Array.isArray(value) ? value : [value];
+ 	if (shape === "scalar") {
+ 		sections[label] = value;
+ 	} else if (count === 0) {
+-		sections[label] = shape === "array" ? [value] : value;
++		sections[label] = shape === "array" ? [...values] : value;
  	} else if (Array.isArray(existing)) {
 -		existing.push(value);
 +		existing.push(...values);

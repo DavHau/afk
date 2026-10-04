@@ -24,8 +24,14 @@
 # the auto-thinking classifier around resolveJudge, and moved yield
 # section assembly into pi-tui; the status-line patch was re-cut across
 # StatusLineHost, the jj e2e test moved to test/task/vcs-jj-e2e.test.ts,
-# and omp-isolation-branch-capture-note was dropped as absorbed) in
-# patches/omp/.
+# and omp-isolation-branch-capture-note was dropped as absorbed), then 18.6.0
+# (upstream split settings-schema.ts into per-domain settings.ts registries
+# and auth-storage.ts into auth/* modules, moved per-file cloning into
+# pi-iso's cow.rs, switched isolation to a per-isolation-copy baseline with
+# temp-index task commits, and made TaskTool forward schema failures to
+# execute() via lenientArgValidation — required-flag now also rejects a
+# missing `isolated` at dispatch; omp-task-private-eval-kernel was dropped
+# as absorbed) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -137,16 +143,15 @@
 #   default) instead of upstream's 30 s. With bash disabled every command
 #   runs in eval, and the 30 s default timed out routine ssh/network calls —
 #   a timed-out cell that ignores the interrupt gets its whole kernel killed.
-# - omp-task-private-eval-kernel: task subagents no longer inherit the
-#   parent's eval session id (opt-in via shareEvalSession: true, which no
-#   caller sets). A shared kernel is one process for every non-isolated
-#   agent: one agent's timeout killed the others' cells and state
-#   (2026-10-04 nmm session). Ships one regression test.
+# - (dropped 18.6.0) omp-task-private-eval-kernel: upstream 2232bd8e2a
+#   ("isolated subagent eval kernels from parent session state") gives every
+#   subagent its own kernel and removed parentEvalSessionId/shareEvalSession,
+#   which is exactly what this patch did (a shared kernel let one agent's
+#   timeout kill the others' cells and state, 2026-10-04 nmm session).
 # - omp-eval-named-kernels: eval takes an optional `kernel` name selecting a
 #   separate retained kernel; named-kernel calls run in parallel. A host-side
 #   lane runs one cell per kernel and arms its timeout only once it runs, so
-#   a queued cell's timeout never SIGINTs the cell ahead of it. Applies after
-#   omp-task-private-eval-kernel (shares eval.md context). Ships tests.
+#   a queued cell's timeout never SIGINTs the cell ahead of it. Ships tests.
 # omp-bundled-virtual-modules is DELIBERATELY OMITTED: it is semantically
 # incompatible with omp >= 16.4.8 (symbols verified still absent in 17.0.4).
 # The hyperconfig patch depends on symbols the 16.4.8 refactor removed
@@ -193,7 +198,6 @@ omp.overrideAttrs (old: {
     ../patches/omp/omp-statusline-anthropic-account.patch
     ../patches/omp/omp-eval-host-env-sync.patch
     ../patches/omp/omp-eval-default-timeout.patch
-    ../patches/omp/omp-task-private-eval-kernel.patch
     ../patches/omp/omp-eval-named-kernels.patch
   ];
   # ── Prebuilt natives seam ─────────────────────────────────────────────

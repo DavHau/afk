@@ -31,11 +31,15 @@ What must survive a rebase:
   auto-chain candidate, e.g. "btrfs CLI not on PATH") is used only in
   auto mode.
 
+Rebased 18.2.10 -> 18.6.0: ensureIsolation's candidate/fallbackReason
+lines are unchanged upstream; context shift only. Tests re-applied
+verbatim.
+
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 9a0ee7976a..58ca2205a9 100644
+index 09c8ce2d8d..7e702c3899 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -547,8 +547,17 @@ export async function ensureIsolation(
+@@ -565,8 +565,17 @@ export async function ensureIsolation(
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
  	const resolution = natives.isoResolve(preferred ?? null);
@@ -56,10 +60,10 @@ index 9a0ee7976a..58ca2205a9 100644
  	for (const candidate of candidates) {
  		await fs.rm(baseDir, { recursive: true, force: true });
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 4ad93d7aac..5d19b6910b 100644
+index 43a5855c04..87c322fa54 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -246,6 +246,47 @@ describe("worktree isolation helpers", () => {
+@@ -250,6 +250,47 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fallbackReason).toBe(unavailable.message);
  		});
  
