@@ -27,13 +27,13 @@ const afkBin = (() => {
 	return join(built.stdout.toString().trim().split("\n").at(-1)!, "bin", "afk");
 })();
 
-/** Run `afk config get <key>` in a throwaway HOME + cwd. */
-function configGet(key: string, opts: { userConfig?: string } = {}): string {
+/** Run `afk [...flags] config get <key>` in a throwaway HOME + cwd. */
+function configGet(key: string, opts: { userConfig?: string; flags?: string[] } = {}): string {
 	const root = mkdtempSync(join(tmpdir(), "afk-distro-"));
 	const agentDir = join(root, "home", ".omp", "profiles", "afk", "agent");
 	Bun.spawnSync(["mkdir", "-p", agentDir]);
 	if (opts.userConfig !== undefined) writeFileSync(join(agentDir, "config.yml"), opts.userConfig);
-	const run = Bun.spawnSync([afkBin, "config", "get", key], {
+	const run = Bun.spawnSync([afkBin, ...(opts.flags ?? []), "config", "get", key], {
 		cwd: root,
 		env: { ...process.env, HOME: join(root, "home") },
 	});
@@ -83,5 +83,19 @@ describe("distribution settings layer", () => {
 		]) {
 			expect(existsSync(join(superpowers, "subagent-driven-development", tpl))).toBe(true);
 		}
+	});
+});
+
+describe("afk --no-superpowers", () => {
+	const flags = ["--no-superpowers"];
+
+	it("drops the afk-skills root but keeps the distribution's own skills", () => {
+		const dirs = JSON.parse(configGet("skills.customDirectories", { flags })) as string[];
+		expect(dirs.some(dir => dir.includes("afk-skills"))).toBe(false);
+		expect(dirs.some(dir => existsSync(join(dir, "merging-parked-task-refs", "SKILL.md")))).toBe(true);
+	});
+
+	it("keeps the rest of the distro layer", () => {
+		expect(configGet("task.isolation.enabled", { flags })).toBe("true");
 	});
 });

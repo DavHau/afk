@@ -26,3 +26,7 @@ What a session looks like once you say "build X":
 5. **Land** — after a wave-level and a final whole-branch review, the work is described and ready to ship.
 
 You're welcome to interrupt at any checkpoint — but you don't have to be there.
+
+## Running without Superpowers
+
+`afk --no-superpowers` starts a plain session without the Superpowers skill library. It drops the skills from discovery and skips the `using-superpowers` bootstrap injection. afk's own rules, extensions, and its `merging-parked-task-refs` skill stay active. All other arguments go to omp unchanged.
