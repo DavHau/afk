@@ -40,7 +40,7 @@ settings via cfgPython*; the kernel param was re-threaded there. Lane,
 concurrency, shadow-discard and execute hunks only moved.
 
 diff --git a/packages/coding-agent/src/eval/backend.ts b/packages/coding-agent/src/eval/backend.ts
-index 8cca999834..26eb6db8dd 100644
+index 3b0e4774f9..fdca7cdaf3 100644
 --- a/packages/coding-agent/src/eval/backend.ts
 +++ b/packages/coding-agent/src/eval/backend.ts
 @@ -24,6 +24,8 @@ export interface ExecutorBackendExecOptions {
@@ -164,17 +164,17 @@ index d339b6a9c8..1d49d4589b 100644
 +	return kernel ? `${sessionId}:kernel=${kernel}` : sessionId;
 +}
 diff --git a/packages/coding-agent/src/prompts/tools/eval.md b/packages/coding-agent/src/prompts/tools/eval.md
-index 546fcf3a39..da4c8ce057 100644
+index 06f3cfc9e2..d61aef8e83 100644
 --- a/packages/coding-agent/src/prompts/tools/eval.md
 +++ b/packages/coding-agent/src/prompts/tools/eval.md
 @@ -1,4 +1,5 @@
  One cell per call; top-level state persists, including across compaction.{{#if spawns}} Subagents have separate kernels.{{/if}}
 +One cell runs per kernel at a time; a call on a busy kernel waits, and its `timeout` starts once it runs. `kernel: "<name>"` selects a separate named kernel with its own state; different kernels run in parallel. Long or blocking work (remote jobs, servers, waits) → its own named kernel, so your main kernel stays free.
  {{#if spawns}}{{#if eagerDelegation}}For 2+ independent items, use a named `workpool()`; results auto-deliver.{{#if waitTool}} If blocked, leave `eval` and call `wait`.{{/if}}{{/if}}{{/if}}
- {{#if py}}Python: top-level `await` works; `asyncio.run(…)` fails.{{/if}}
+ {{#if py}}Python: plain Python subprocess, not IPython (no `get_ipython()`, `obj?`, or `%matplotlib`). Magics like `%pip`, `%load`, `%time` and `!cmd` are rewritten to Python. Top-level `await` works; `asyncio.run(…)` fails.{{/if}}
  {{#if js}}JS: Bun (`Bun.file`, `Bun.write`, `Bun.$`); top-level `await`/`return` work.{{/if}}
 diff --git a/packages/coding-agent/src/tools/eval.ts b/packages/coding-agent/src/tools/eval.ts
-index 9b5a9e9b3f..b5aeacee71 100644
+index c8c8c6a149..558c484295 100644
 --- a/packages/coding-agent/src/tools/eval.ts
 +++ b/packages/coding-agent/src/tools/eval.ts
 @@ -18,7 +18,7 @@ import { IdleTimeout } from "../eval/idle-timeout";
@@ -186,7 +186,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  import { EvalShadowCellSession } from "../eval/speculation/cell-session";
  import { runWithEvalShadowCell } from "../eval/speculation/runtime-context";
  import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "@oh-my-pi/pi-tui/tools/eval";
-@@ -105,6 +105,7 @@ const evalCellCommonFields = {
+@@ -103,6 +103,7 @@ const evalCellCommonFields = {
  	"title?": type("string").describe("Short transcript label."),
  	"timeout?": type("number").describe("Cell deadline in seconds; 0 disables it."),
  	"reset?": type("boolean").describe("Wipe only this kernel."),
@@ -194,7 +194,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  };
  
  /**
-@@ -149,6 +150,44 @@ const DISPLAY_ELISION_RESERVE_BYTES = 64;
+@@ -147,6 +148,44 @@ const DISPLAY_ELISION_RESERVE_BYTES = 64;
  /** Minimum spacing between live eval updates; bursts coalesce to one trailing snapshot. */
  const LIVE_UPDATE_INTERVAL_MS = 50;
  
@@ -239,7 +239,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  interface FormattedDisplayJson {
  	fullText: string;
  	previewText: string;
-@@ -293,6 +332,7 @@ interface ResolvedEvalCell {
+@@ -291,6 +330,7 @@ interface ResolvedEvalCell {
  	environment?: "managed" | "project";
  	timeoutMs: number;
  	reset: boolean;
@@ -247,7 +247,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  	resolved: ResolvedBackend;
  }
  
-@@ -454,7 +494,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -425,7 +465,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  		}
  		return this.#cachedParams ?? evalSchema;
  	}
@@ -258,7 +258,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  	readonly strict = true;
  	readonly intent = (args: Partial<typeof evalSchema.infer>): string | undefined => {
  		const title = typeof args.title === "string" ? args.title : undefined;
-@@ -528,6 +570,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -505,6 +547,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  		const session = this.session;
  		const excludeWebP = webpExclusionForModel(session.getActiveModel?.());
  
@@ -266,10 +266,10 @@ index 9b5a9e9b3f..b5aeacee71 100644
 +		if (kernel !== undefined && !EVAL_KERNEL_NAME.test(kernel)) {
 +			throw new ToolError(`Invalid kernel name ${JSON.stringify(kernel)}: use 1-32 of [A-Za-z0-9_-].`);
 +		}
- 		const cellLanguage: EvalLanguage = params.language === "py" ? "python" : "js";
+ 		const cellLanguage: EvalLanguage = params.language === "py" ? "python" : params.language;
  		// Bound backend discovery by the eval cell's own timeout and abort signal:
  		// the cell IdleTimeout is armed only later in #runCells, so a hung runtime
-@@ -538,8 +584,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -515,8 +561,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  				: clampTimeout("eval", params.timeout, cfgToolsMaxTimeout.get(session.settings)) * 1000;
  		const resolved = await resolveBackend(session, cellLanguage, { signal, timeoutMs: cellTimeoutMs });
  		const source = await prepareEvalSource(params, session, signal);
@@ -282,7 +282,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  		}
  		const cells: ResolvedEvalCell[] = [
  			{
-@@ -552,6 +600,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -529,6 +577,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  					source.environment ?? (this.#environmentModes[cellLanguage] === "project" ? "project" : undefined),
  				timeoutMs: cellTimeoutMs,
  				reset: params.reset ?? false,
@@ -290,7 +290,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  				resolved,
  			},
  		];
-@@ -906,6 +955,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -895,6 +944,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  			for (let i = 0; i < cells.length; i++) {
  				const cell = cells[i];
  				const backend = cell.resolved.backend;
@@ -303,7 +303,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  				// The per-cell `timeout` is a budget on the cell runtime's *own*
  				// work. Host-side waits on `agent()`/`completion()` handles suspend
  				// that budget entirely and restart a fresh timeout window when control
-@@ -948,6 +1003,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -938,6 +993,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  						session,
  						idleTimeoutMs,
  						reset: cell.reset,
@@ -311,7 +311,7 @@ index 9b5a9e9b3f..b5aeacee71 100644
  						filename: cell.filename,
  						packages: cell.packages,
  						environment: cell.environment,
-@@ -975,6 +1031,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -964,6 +1020,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  					});
  				} finally {
  					idle?.dispose();

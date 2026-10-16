@@ -60,11 +60,19 @@ the fds or the FICLONE ioctl, so the degradation now wraps
 cow::clone_file and byte-copies with fs::copy; the test FICLONE probe
 uses cow::clone_file too.
 
+Rebased 18.6.0 -> 18.11.1: upstream replaced recursive_reflink with the
+shared tree::copy_dir_contents walk over a TreeCopy impl (`Reflink`), and
+clone_file now uses cow::clone_new (open src/dst handles, removes dst on
+failure). `Reflink` carries require_cow; start/clone_tree share
+clone_with(). The degradation byte-copies into a create_new dst via
+io::copy and returns the same handle pair, so the mode/time preservation
+after it is shared with the clone path.
+
 diff --git a/crates/pi-iso/src/lib.rs b/crates/pi-iso/src/lib.rs
-index 51cae6432b..e8f808ff1f 100644
+index 5d0de8c4d7..626d536a23 100644
 --- a/crates/pi-iso/src/lib.rs
 +++ b/crates/pi-iso/src/lib.rs
-@@ -175,6 +175,18 @@ impl ProbeResult {
+@@ -176,6 +176,18 @@ impl ProbeResult {
  	}
  }
  
@@ -83,7 +91,7 @@ index 51cae6432b..e8f808ff1f 100644
  /// Error returned by every backend operation.
  ///
  /// `Unavailable` is the only variant callers are expected to treat specially —
-@@ -252,6 +264,14 @@ pub trait IsolationBackend: Send + Sync {
+@@ -271,6 +283,14 @@ pub trait IsolationBackend: Send + Sync {
  
  	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()>;
  
@@ -99,12 +107,12 @@ index 51cae6432b..e8f808ff1f 100644
  	/// entries.
  	fn clone_tree(
 diff --git a/crates/pi-iso/src/linux_reflink.rs b/crates/pi-iso/src/linux_reflink.rs
-index 1f575f6bbc..2b03a5fde7 100644
+index b92b320633..18ce3e511b 100644
 --- a/crates/pi-iso/src/linux_reflink.rs
 +++ b/crates/pi-iso/src/linux_reflink.rs
 @@ -4,9 +4,12 @@
  //! `lower`. Directories and symlinks are recreated, while regular files are
- //! cloned with [`cow::clone_file`](crate::cow::clone_file) (the Linux
+ //! cloned with [`cow`](crate::cow) (the Linux
  //! `FICLONE` ioctl) so filesystems such as btrfs, XFS,
 -//! OCFS2, and bcachefs can share extents until either side is modified. There
 -//! is no mount or kernel state to undo, so [`stop`](IsolationBackend::stop) is
@@ -147,79 +155,103 @@ index 1f575f6bbc..2b03a5fde7 100644
  			Err(IsoError::unavailable("Linux FICLONE reflink isolation is only available on Linux"))
  		}
  	}
-@@ -90,11 +97,11 @@ mod imp {
- 
- 	use crate::{IsoError, IsoResult, cow};
+@@ -93,18 +100,30 @@ mod imp {
+ 		tree::{self, TreeCopy},
+ 	};
  
 -	pub fn start(lower: &Path, merged: &Path) -> IsoResult<()> {
+-		clone_tree(lower, merged, &[])
 +	pub fn start(lower: &Path, merged: &Path, require_cow: bool) -> IsoResult<()> {
- 		let lower = canonical_existing_dir(lower)?;
- 		prepare_destination(merged)?;
++		clone_with(lower, merged, &[], &Reflink { require_cow })
+ 	}
  
--		let result = recursive_reflink(&lower, merged, None);
-+		let result = recursive_reflink(&lower, merged, None, require_cow);
- 		if result.is_err() {
- 			let _ = fs::remove_dir_all(merged);
- 		}
-@@ -104,7 +111,10 @@ mod imp {
  	pub fn clone_tree(lower: &Path, merged: &Path, skip: &[&std::ffi::OsStr]) -> IsoResult<()> {
- 		let lower = canonical_existing_dir(lower)?;
- 		prepare_destination(merged)?;
--		let result = recursive_reflink(&lower, merged, Some(skip));
 +		// Worktree clones keep upstream's contract: a filesystem that cannot
 +		// clone extents fails here and the caller falls back to a plain
 +		// checkout, never to a silent full byte copy of the tree.
-+		let result = recursive_reflink(&lower, merged, Some(skip), true);
++		clone_with(lower, merged, skip, &Reflink { require_cow: true })
++	}
++
++	fn clone_with(
++		lower: &Path,
++		merged: &Path,
++		skip: &[&std::ffi::OsStr],
++		copy: &Reflink,
++	) -> IsoResult<()> {
+ 		let lower = tree::canonical_existing_dir(lower, "reflink source", IsoError::other)?;
+ 		tree::prepare_destination(merged, "reflink clone", tree::remove_existing)?;
+ 		let result = (|| {
+ 			fs::create_dir(merged)
+ 				.map_err(|err| IsoError::other(format!("create {}: {err}", merged.display())))?;
+-			tree::copy_dir_contents(&lower, merged, skip, &Reflink)?;
+-			Reflink.finish_dir(&lower, merged)
++			tree::copy_dir_contents(&lower, merged, skip, copy)?;
++			copy.finish_dir(&lower, merged)
+ 		})();
  		if result.is_err() {
  			let _ = fs::remove_dir_all(merged);
+@@ -123,7 +142,10 @@ mod imp {
  		}
-@@ -174,6 +184,7 @@ mod imp {
- 		src: &Path,
- 		dst: &Path,
- 		skip: Option<&[&std::ffi::OsStr]>,
+ 	}
+ 
+-	struct Reflink;
++	struct Reflink {
++		/// Refuse the byte-copy degradation on filesystems without FICLONE.
 +		require_cow: bool,
- 	) -> IsoResult<()> {
- 		let meta = fs::symlink_metadata(src)
- 			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
-@@ -196,9 +207,9 @@ mod imp {
- 			if file_type.is_symlink() {
- 				clone_symlink(&src_path, &dst_path)?;
- 			} else if file_type.is_dir() {
--				recursive_reflink(&src_path, &dst_path, None)?;
-+				recursive_reflink(&src_path, &dst_path, None, require_cow)?;
- 			} else if file_type.is_file() {
--				clone_file(&src_path, &dst_path)?;
-+				clone_file(&src_path, &dst_path, require_cow)?;
- 			} else {
- 				return Err(IsoError::other(format!(
- 					"unsupported file type in reflink source: {}",
-@@ -223,10 +234,23 @@ mod imp {
++	}
+ 
+ 	impl TreeCopy for Reflink {
+ 		fn symlink(&self, src: &Path, dst: &Path, file_type: FileType) -> IsoResult<()> {
+@@ -141,7 +163,7 @@ mod imp {
+ 					src.display()
+ 				)));
+ 			}
+-			clone_file(src, dst)
++			clone_file(src, dst, self.require_cow)
+ 		}
+ 
+ 		fn finish_dir(&self, src: &Path, dst: &Path) -> IsoResult<()> {
+@@ -155,9 +177,12 @@ mod imp {
+ 
+ 	/// Clones the regular file `src` into the fresh tree, then gives the clone
+ 	/// `src`'s mode and timestamps through the descriptors the clone used.
+-	fn clone_file(src: &Path, dst: &Path) -> IsoResult<()> {
+-		let (src_file, dst_file) =
+-			cow::clone_new(src, dst).map_err(|err| map_clone_error(src, dst, &err))?;
++	fn clone_file(src: &Path, dst: &Path, require_cow: bool) -> IsoResult<()> {
++		let (src_file, dst_file) = match cow::clone_new(src, dst) {
++			Ok(files) => files,
++			Err(err) if !require_cow && cow::is_unsupported(&err) => byte_copy(src, dst)?,
++			Err(err) => return Err(map_clone_error(src, dst, &err)),
++		};
+ 		let meta = src_file
+ 			.metadata()
+ 			.map_err(|err| IsoError::other(format!("metadata {}: {err}", src.display())))?;
+@@ -175,6 +200,23 @@ mod imp {
  		Ok(())
  	}
  
--	fn clone_file(src: &Path, dst: &Path) -> IsoResult<()> {
-+	fn clone_file(src: &Path, dst: &Path, require_cow: bool) -> IsoResult<()> {
- 		let meta = fs::symlink_metadata(src)
- 			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
--		cow::clone_file(src, dst).map_err(|err| map_clone_error(src, dst, &err))?;
-+		if let Err(err) = cow::clone_file(src, dst) {
-+			if require_cow || !cow::is_unsupported(&err) {
-+				return Err(map_clone_error(src, dst, &err));
-+			}
-+			// The filesystem cannot clone extents (ext4, tmpfs, ...). Degrade
-+			// to a plain byte copy: the snapshot's file set, freeze and capture
-+			// semantics are identical — only the storage cost grows.
-+			// `cow::clone_file` left no `dst` behind; `fs::copy` uses in-kernel
-+			// copy_file_range/sendfile where available.
-+			fs::copy(src, dst).map_err(|copy_err| {
-+				let _ = fs::remove_file(dst);
-+				IsoError::other(format!("copy {} -> {}: {copy_err}", src.display(), dst.display()))
-+			})?;
-+		}
- 		preserve_permissions(dst, &meta)?;
- 		let _ = set_times_nofollow(dst, &meta);
- 		Ok(())
-@@ -268,3 +292,129 @@ mod imp {
++	/// The filesystem cannot clone extents (ext4, tmpfs, ...): degrade to a
++	/// plain byte copy. The snapshot's file set, freeze and capture semantics
++	/// are identical — only the storage cost grows. `cow::clone_new` left no
++	/// `dst` behind; `io::copy` between files uses in-kernel copy_file_range.
++	fn byte_copy(src: &Path, dst: &Path) -> IsoResult<(fs::File, fs::File)> {
++		let copy = || -> std::io::Result<(fs::File, fs::File)> {
++			let mut src_file = fs::File::open(src)?;
++			let mut dst_file = fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
++			std::io::copy(&mut src_file, &mut dst_file)?;
++			Ok((src_file, dst_file))
++		};
++		copy().map_err(|err| {
++			let _ = fs::remove_file(dst);
++			IsoError::other(format!("copy {} -> {}: {err}", src.display(), dst.display()))
++		})
++	}
++
+ 	fn map_clone_error(src: &Path, dst: &Path, err: &std::io::Error) -> IsoError {
+ 		if cow::is_unsupported(err) {
+ 			return IsoError::unavailable(format!(
+@@ -211,3 +253,129 @@ mod imp {
  		}
  	}
  }
@@ -350,11 +382,11 @@ index 1f575f6bbc..2b03a5fde7 100644
 +
 +}
 diff --git a/crates/pi-natives/src/iso.rs b/crates/pi-natives/src/iso.rs
-index 3a962aa9ac..130ff2e1cc 100644
+index edf2aa46ec..f27bbc80bb 100644
 --- a/crates/pi-natives/src/iso.rs
 +++ b/crates/pi-natives/src/iso.rs
 @@ -7,8 +7,10 @@
- //!   hint) and report any fallback to the caller.
+ //!   hint) and report any fallback to the caller; probes run off the JS thread.
  //! - `iso_probe(kind?)` — backend availability, with an optional explicit kind
  //!   override; falls back to the native backend when omitted.
 -//! - `iso_start(kind?, lower, merged)` / `iso_stop(kind?, merged)` — sync
@@ -373,10 +405,10 @@ index 3a962aa9ac..130ff2e1cc 100644
 -use pi_iso::{BackendKind, ChangeKind, Diff, FileChange, IsoError, IsolationBackend};
 +use pi_iso::{BackendKind, ChangeKind, Diff, FileChange, IsoError, IsolationBackend, StartOptions};
  
- use crate::js;
+ use crate::{js, task};
  
-@@ -129,17 +131,35 @@ pub fn iso_resolve(preferred: Option<IsoBackendKind>) -> IsoResolveResult {
- 	}
+@@ -134,17 +136,35 @@ pub fn iso_resolve(preferred: Option<IsoBackendKind>) -> task::Promise<IsoResolv
+ 	})
  }
  
 +/// Options for [`iso_start`].
@@ -417,10 +449,10 @@ index 3a962aa9ac..130ff2e1cc 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index bdefedbbd7..5a1a32ca4e 100644
+index d87dda1a5e..8441dc46a9 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -2088,9 +2088,20 @@ export interface IsoResolveResult {
+@@ -2413,9 +2413,20 @@ export interface IsoResolveResult {
  
  /**
   * Materialise `merged` as a writable view of `lower` using the requested

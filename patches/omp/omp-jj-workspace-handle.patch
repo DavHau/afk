@@ -44,10 +44,10 @@ tests were reworked for the new baseline API (incl. a drift check); the
 conflict test probes the parked ref directly.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 8c6688bcff..fc6d45dc57 100644
+index 12f5b6d038..00b3a6f0d6 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -131,6 +131,7 @@ Artifacts and side channels:
+@@ -130,6 +130,7 @@ Artifacts and side channels:
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Speculative launch (`task.speculativeLaunch`, default on; batch mode only) — while a `{ context, tasks[] }` call streams, the tool's stream session (`src/task/speculative-launch.ts`) starts each item's `SpawnRun` as soon as that item's JSON object closes (`context` must already have closed), and starts the remainder when the call finishes streaming. Dispatch adopts runs whose normalized spawn params still match; an invalid finished call, launched items that differ from the finished call, a blocking hook, or an aborted turn aborts every launched run. Launches need host authorization (`authorizeLaunch`): auto-allowed `task` approval and no extension `tool_call`/`tool_result`/approval lifecycle handlers.
  - Isolation is enabled with `task.isolation.enabled`; `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
@@ -555,11 +555,11 @@ index 40bf9d7669..756f50813c 100644
  	return new GitCheckoutHandle(root);
  }
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 3ae169c7f7..09c8ce2d8d 100644
+index 811ac07cd7..76ea0315fd 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -551,13 +551,17 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
- 	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
+@@ -616,13 +616,17 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
+ 	}
  }
  
 +/**
@@ -578,7 +578,17 @@ index 3ae169c7f7..09c8ce2d8d 100644
 +	const sourceCommonDir = vcs.git(repoRoot)?.info().commonDir ?? path.join(repoRoot, ".git");
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
- 	const resolution = natives.isoResolve(preferred ?? null);
+ 	const resolution = await natives.isoResolve(preferred ?? null);
+@@ -647,7 +651,8 @@ export async function ensureIsolation(
+ 			// task's git operations would mutate the parent checkout and stack
+ 			// parallel task branches. Detaching gives each isolation a private,
+ 			// frozen repo that still borrows the source object DB via alternates.
+-			await detachSubmodules(repoRoot, mergedDir);
++			// Pure jj workspaces have no git checkout, hence no submodules.
++			if (vcs.git(repoRoot)) await detachSubmodules(repoRoot, mergedDir);
+ 			await vcs.detachGitDir(mergedDir, sourceCommonDir);
+ 			return {
+ 				mergedDir,
 diff --git a/packages/coding-agent/test/task/vcs-jj-e2e.test.ts b/packages/coding-agent/test/task/vcs-jj-e2e.test.ts
 new file mode 100644
 index 0000000000..a13f8ed380
@@ -956,10 +966,10 @@ index 0760f0e404..97afe95781 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index a655a8c9ee..43a5855c04 100644
+index d4622c99ab..84ec4ef44e 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -250,6 +250,27 @@ describe("worktree isolation helpers", () => {
+@@ -252,6 +252,27 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fallbackReason).toBe(unavailable.message);
  		});
  
@@ -971,7 +981,7 @@ index a655a8c9ee..43a5855c04 100644
 +			tempDirs.push(jjWs);
 +			await fs.mkdir(path.join(jjWs, ".jj"), { recursive: true });
 +			await fs.writeFile(path.join(jjWs, ".jj", "repo"), "../../elsewhere/.jj/repo");
-+			vi.spyOn(natives, "isoResolve").mockReturnValue({
++			vi.spyOn(natives, "isoResolve").mockResolvedValue({
 +				kind: natives.IsoBackendKind.Rcopy,
 +				candidates: [natives.IsoBackendKind.Rcopy],
 +				fellBack: false,

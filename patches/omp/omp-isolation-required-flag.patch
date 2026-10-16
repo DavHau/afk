@@ -53,7 +53,7 @@ a call without `isolated`; failed-child-artifact.test.ts fixtures gained
 explicit isolated: false.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index fc6d45dc57..5e49a7b834 100644
+index 00b3a6f0d6..a1eab77094 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
 @@ -30,7 +30,7 @@
@@ -65,14 +65,14 @@ index fc6d45dc57..5e49a7b834 100644
  
  - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `outputSchema`, and `schemaMode` are per item. `effort` is added only when its setting enables it; `isolated` additionally requires plan mode to be disabled.
  - **Flat shape** (`task.batch` off): `{ ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each spawn's `task` references; subagents share the parent's `local://` root.
-@@ -48,7 +48,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
+@@ -47,7 +47,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
  | `outputSchema` | JSON Schema (`object \| boolean \| string \| null` at the coarse wire-validation layer) | No | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape. |
  | `schemaMode` | `"permissive" \| "strict"` | No | Validation mode for the effective output schema. Overrides the parent mode; defaults to `permissive`. After schema-retry exhaustion, permissive mode can accept invalid payloads with a warning; strict mode fails. Invalid caller schemas fail preflight in either mode. |
  | `tools` | `string[]` | No | Named tools already defined in the parent's Python or JS eval kernel. Present when `eval.tools.enabled=true`; child calls execute in the parent kernel, not the child's. Rejected in plan mode. Item field in batch shape, top-level in flat shape. |
 -| `isolated` | `boolean` | No | Run in an isolated workspace and capture patches/branch changes. Present only when `task.isolation.enabled` is true and plan mode is disabled. Kept-alive task agents retain their workspace through idle/parked transitions and can be revived; release captures final changes and cleans the workspace. |
 +| `isolated` | `boolean` | Yes (when present) | Run in an isolated workspace and capture patches/branch changes. Present only when `task.isolation.enabled` is true and plan mode is disabled, and is then required — the caller must choose explicitly per spawn; a call that omits it is rejected at dispatch even though lenient argument validation forwards it past the wire schema. Kept-alive task agents retain their workspace through idle/parked transitions and can be revived; release captures final changes and cleans the workspace. |
  
- A supplied `model` may be one selector or an ordered, non-empty array. Every array element must contain a non-empty selector. Blank/comma-only values and invalid thinking suffixes are rejected; registered literal IDs ending in `:max` or other suffixes remain model IDs. A batch-container `model` is rejected rather than dropped: put it on each `tasks[]` item.
+ There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
  
 diff --git a/packages/coding-agent/src/commit/agentic/tools/analyze-file.ts b/packages/coding-agent/src/commit/agentic/tools/analyze-file.ts
 index f5d87ba849..30634306b2 100644
@@ -89,25 +89,25 @@ index f5d87ba849..30634306b2 100644
  					return taskTool.execute(`${toolCallId}-${index + 1}`, taskParams, signal);
  				}),
 diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
-index c5e45bdf28..9e851dba19 100644
+index a1eb367a24..4d4638cf39 100644
 --- a/packages/coding-agent/src/prompts/tools/task.md
 +++ b/packages/coding-agent/src/prompts/tools/task.md
-@@ -16,8 +16,8 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
+@@ -18,8 +18,8 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
+ {{#if evalToolsEnabled}}`tools`: eval-defined, run in your kernel.
  {{/if}}{{#if effortEnabled}}`effort`: `"lo"`|`"med"`|`"hi"` by how open-ended the problem is.
- {{/if}}`model`: selector or ordered array overriding the agent's model for this spawn (`provider/model[:level]`, role alias like `@smol`, `@default` = parent's live model){{#if batchEnabled}}; set per `tasks[]` item, never top-level{{/if}}. Omit unless a specific model is needed. Requested model unavailable → stop and report; NEVER substitute another.
- `schemaMode`: default permissive warns after retries; strict fails.
--{{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: worktree; successful changes apply to parent.
+ {{/if}}{{#if structured}}`schemaMode`: default permissive warns after retries; strict fails.
+-{{/if}}{{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: worktree; successful changes apply to parent.
 -{{else}}`isolated`: worktree; changes retained, not applied.
-+{{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: REQUIRED per spawn. `true`: copy-on-write worktree; successful changes apply to parent. `false`: edits YOUR worktree directly. File-editing spawns MUST set `true`; `false` only for read-only work.
++{{/if}}{{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: REQUIRED per spawn. `true`: copy-on-write worktree; successful changes apply to parent. `false`: edits YOUR worktree directly. File-editing spawns MUST set `true`; `false` only for read-only work.
 +{{else}}`isolated`: REQUIRED per spawn. `true`: copy-on-write worktree; changes retained as patch/branch artifacts, never applied to YOUR worktree. `false`: edits YOUR worktree directly. File-editing spawns MUST set `true`; `false` only for read-only work.
  {{/if}}{{/if}}Children start blank;{{#if ircEnabled}} parent IRC steers immediately;{{/if}} large payloads via `local://<path>`, NEVER inline.
  
  # Format
 diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
-index 809ed8c2f0..db77bcb03b 100644
+index 3e330d6c5a..b46e7ee3a4 100644
 --- a/packages/coding-agent/src/task/index.ts
 +++ b/packages/coding-agent/src/task/index.ts
-@@ -236,13 +236,28 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
+@@ -240,13 +240,28 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
   * undefined when valid.
   */
  
@@ -137,10 +137,14 @@ index 809ed8c2f0..db77bcb03b 100644
  	const hasTask = typeof params.task === "string" && params.task.trim() !== "";
  	const tasks = params.tasks;
  	if (batchEnabled && tasks !== undefined) {
-@@ -262,6 +277,10 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+@@ -261,8 +276,13 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+ 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
+ 				return `Task ${i + 1}${item?.name ? ` (\`${item.name}\`)` : ""} is missing \`task\`. Every task needs complete, self-contained instructions.`;
+ 			}
+-			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
++			const label = `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`;
++			const effortError = validateEffort(item.effort, label);
  			if (effortError) return effortError;
- 			const modelError = invalidModelSelectorReason(item.model, label);
- 			if (modelError) return modelError;
 +			if (isolationRequired) {
 +				const isolatedError = missingIsolatedReason(item.isolated, label);
 +				if (isolatedError) return isolatedError;
@@ -148,20 +152,19 @@ index 809ed8c2f0..db77bcb03b 100644
  		}
  		const seen = new Map<string, string>();
  		for (const item of tasks) {
-@@ -284,7 +303,11 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+@@ -285,7 +305,10 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
  			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
  			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
  	}
--	return validateEffort(params.effort, "The call") ?? invalidModelSelectorReason(params.model, "The call");
+-	return validateEffort(params.effort, "The call");
 +	return (
 +		validateEffort(params.effort, "The call") ??
-+		invalidModelSelectorReason(params.model, "The call") ??
 +		(isolationRequired ? missingIsolatedReason(params.isolated, "The call") : undefined)
 +	);
  }
  
  /**
-@@ -348,9 +371,15 @@ interface SpawnPlan {
+@@ -347,9 +370,15 @@ interface SpawnPlan {
   * validation error the call reports instead when the shape is rejected. Shared
   * by dispatch and the speculative launcher so both derive identical spawns.
   */
@@ -179,7 +182,7 @@ index 809ed8c2f0..db77bcb03b 100644
  	if (error) return error;
  	const items = resolveSpawnItems(params);
  	return { params, items, spawns: items.map(item => spawnParamsFor(params, item, defaultAgent)) };
-@@ -650,7 +679,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -649,7 +678,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  	readonly #launchSessions = new Map<string, TaskLaunchSession>();
  	readonly #launcher: TaskLauncher = {
  		spawns: args => {
@@ -188,7 +191,7 @@ index 809ed8c2f0..db77bcb03b 100644
  			return typeof plan === "string" ? undefined : plan.spawns;
  		},
  		start: (toolCallId, spawn, index, signal) => this.#startSpeculative(toolCallId, spawn, index, signal),
-@@ -681,10 +710,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -680,10 +709,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  	};
  
  	get parameters(): TaskToolSchemaInstance {
@@ -200,7 +203,7 @@ index 809ed8c2f0..db77bcb03b 100644
  			batchEnabled: this.#isBatchEnabled(),
  			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
  			evalToolsEnabled: evalToolsEnabled(this.session),
-@@ -699,14 +726,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -708,14 +735,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  	/** Dynamic description that reflects current task settings. */
  	get description(): string {
  		const disabledAgents = cfgTaskDisabledAgents.get(this.session.settings);
@@ -216,8 +219,8 @@ index 809ed8c2f0..db77bcb03b 100644
  			applyIsolatedChanges: cfgTaskIsolationApply.get(this.session.settings),
  			disabledAgents,
  			batchEnabled: this.#isBatchEnabled(),
-@@ -729,6 +754,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 		return cfgTaskBatch.get(this.session.settings);
+@@ -758,6 +783,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+ 		};
  	}
  
 +	/** Whether the schema exposes (and therefore requires) `isolated`: isolation on, plan mode off. */
@@ -229,7 +232,7 @@ index 809ed8c2f0..db77bcb03b 100644
  	#defaultAgent(): string {
  		return resolveSpawnPolicy(this.session.getSessionSpawns()).defaultAgent;
  	}
-@@ -869,7 +900,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -896,7 +927,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  		// item's agent type against the session's actual default agent.
  		const defaultAgent = this.#defaultAgent();
  		const batchEnabled = this.#isBatchEnabled();
@@ -239,10 +242,10 @@ index 809ed8c2f0..db77bcb03b 100644
  			return createTaskModeError(plan);
  		}
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index 00031bfd38..620d2c5e81 100644
+index fb2b37fb01..dd00c4927c 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
-@@ -65,7 +65,7 @@ const taskItemSchemaIsolated = type({
+@@ -63,7 +63,7 @@ const taskItemSchemaIsolated = type({
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
  	"tools?": "string[]",
@@ -251,7 +254,7 @@ index 00031bfd38..620d2c5e81 100644
  	"+": "delete",
  });
  
-@@ -78,7 +78,7 @@ export const taskSchema = type({
+@@ -75,7 +75,7 @@ export const taskSchema = type({
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
  	"tools?": "string[]",
@@ -260,18 +263,18 @@ index 00031bfd38..620d2c5e81 100644
  	"+": "delete",
  });
  const taskSchemaNoIsolation = type({
-@@ -144,7 +144,7 @@ function createTaskSchema(options: {
- 				"outputSchema?": outputSchemaInputSchema,
- 				"schemaMode?": '"permissive" | "strict"',
+@@ -140,7 +140,7 @@ function createTaskSchema(options: {
+ 				...effortField,
+ 				...schemaFields,
  				...toolsField,
 -				"isolated?": "boolean",
 +				isolated: "boolean",
  				"+": "delete",
  			});
  			return type.raw({
-@@ -184,7 +184,7 @@ function createTaskSchema(options: {
- 			"outputSchema?": outputSchemaInputSchema,
- 			"schemaMode?": '"permissive" | "strict"',
+@@ -174,7 +174,7 @@ function createTaskSchema(options: {
+ 			...effortField,
+ 			...schemaFields,
  			...toolsField,
 -			"isolated?": "boolean",
 +			isolated: "boolean",
@@ -301,7 +304,7 @@ index ca79dd45ba..30cac21825 100644
  			});
  			await manager.getJob("Builder")?.promise;
 diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
-index 9853c84779..4ce696ef1a 100644
+index 17c6355b91..d049fd69db 100644
 --- a/packages/coding-agent/test/task/task-batch.test.ts
 +++ b/packages/coding-agent/test/task/task-batch.test.ts
 @@ -177,6 +177,30 @@ describe("task.batch schema gating", () => {
@@ -335,7 +338,7 @@ index 9853c84779..4ce696ef1a 100644
  	it("hides isolation from the dynamic batch schema in plan mode", async () => {
  		mockDiscovery();
  		const tool = await TaskTool.create(
-@@ -325,6 +349,50 @@ describe("task.batch validation", () => {
+@@ -375,6 +399,50 @@ describe("task.batch validation", () => {
  		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
  		expect(toolResult?.role === "toolResult" && toolResult.isError).toBe(false);
  	});
@@ -387,7 +390,7 @@ index 9853c84779..4ce696ef1a 100644
  
  describe("task.batch spawning", () => {
 diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
-index 6f97fa3128..da9ff1c9b8 100644
+index 04bc795151..6ca2598bc9 100644
 --- a/packages/coding-agent/test/task/task-schema.test.ts
 +++ b/packages/coding-agent/test/task/task-schema.test.ts
 @@ -14,7 +14,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -407,26 +410,8 @@ index 6f97fa3128..da9ff1c9b8 100644
  			outputSchema,
  			schemaMode: "strict",
  			tools: ["word_count"],
-@@ -104,7 +105,7 @@ describe("per-call model schema boundaries", () => {
- 				const result = schema({
- 					context: "Shared context",
- 					model: "p/requested",
--					tasks: [{ task: "Do work", solutionSpace: "c" }],
-+					tasks: [{ task: "Do work", solutionSpace: "c", isolated: false }],
- 				});
- 				expect(result instanceof type.errors).toBe(true);
- 			});
-@@ -113,7 +114,7 @@ describe("per-call model schema boundaries", () => {
- 
- 	it("accepts ordered model arrays on both flat calls and batch items", () => {
- 		const models = ["p/preferred:high", "p/alternative"];
--		const flat = taskSchema({ task: "Do work", solutionSpace: "c", model: models });
-+		const flat = taskSchema({ task: "Do work", solutionSpace: "c", isolated: false, model: models });
- 		expect(flat instanceof type.errors).toBe(false);
- 		if (flat instanceof type.errors) throw new Error(flat.summary);
- 		expect(flat.model).toEqual(models);
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index ae95684d01..dfce8645fe 100644
+index b1a093e324..192d5bd83f 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
 @@ -7,9 +7,10 @@ import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -486,18 +471,3 @@ index ae95684d01..dfce8645fe 100644
  			role: "Rust specialist",
  			description: "stale ui label",
  		});
-@@ -84,7 +99,13 @@ describe("task wire schema", () => {
- 	});
- 
- 	it("keeps a per-call model selector on the flat shape", () => {
--		const parsed = taskSchema({ agent: "task", task: "x", solutionSpace: "c", model: "openai/gpt-5.4:high" });
-+		const parsed = taskSchema({
-+			agent: "task",
-+			task: "x",
-+			solutionSpace: "c",
-+			isolated: false,
-+			model: "openai/gpt-5.4:high",
-+		});
- 		expect(parsed instanceof type.errors).toBe(false);
- 		if (!(parsed instanceof type.errors)) {
- 			expect(parsed.model).toBe("openai/gpt-5.4:high");

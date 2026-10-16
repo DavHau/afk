@@ -36,13 +36,13 @@ lines are unchanged upstream; context shift only. Tests re-applied
 verbatim.
 
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 09c8ce2d8d..7e702c3899 100644
+index 76ea0315fd..33edb6f2ee 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -565,8 +565,17 @@ export async function ensureIsolation(
+@@ -630,8 +630,17 @@ export async function ensureIsolation(
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
- 	const resolution = natives.isoResolve(preferred ?? null);
+ 	const resolution = await natives.isoResolve(preferred ?? null);
 -	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
 -	let fallbackReason = resolution.reason ?? null;
 +	const autoCandidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
@@ -60,10 +60,10 @@ index 09c8ce2d8d..7e702c3899 100644
  	for (const candidate of candidates) {
  		await fs.rm(baseDir, { recursive: true, force: true });
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 43a5855c04..87c322fa54 100644
+index 84ec4ef44e..7ee2165216 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -250,6 +250,47 @@ describe("worktree isolation helpers", () => {
+@@ -252,6 +252,47 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fallbackReason).toBe(unavailable.message);
  		});
  
@@ -74,7 +74,7 @@ index 43a5855c04..87c322fa54 100644
 +			// surfaced error must be the pinned backend's own failure, not the
 +			// resolver's complaint about an unrelated auto-chain candidate.
 +			const unavailable = new Error("ISO_UNAVAILABLE: kernel overlay mount denied");
-+			vi.spyOn(natives, "isoResolve").mockReturnValue({
++			vi.spyOn(natives, "isoResolve").mockResolvedValue({
 +				kind: natives.IsoBackendKind.Overlayfs,
 +				candidates: [natives.IsoBackendKind.Overlayfs, natives.IsoBackendKind.Rcopy],
 +				fellBack: false,
@@ -93,7 +93,7 @@ index 43a5855c04..87c322fa54 100644
 +		});
 +
 +		it("succeeds on a pinned backend without consulting the fallback chain", async () => {
-+			vi.spyOn(natives, "isoResolve").mockReturnValue({
++			vi.spyOn(natives, "isoResolve").mockResolvedValue({
 +				kind: natives.IsoBackendKind.Overlayfs,
 +				candidates: [natives.IsoBackendKind.Overlayfs, natives.IsoBackendKind.Rcopy],
 +				fellBack: false,

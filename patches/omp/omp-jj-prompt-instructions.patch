@@ -58,10 +58,10 @@ index 88d1899670..159ef0d22a 100644
  - Canonical plan: MUST write `local://<slug>-plan.md`.
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index 863b25747b..30e891a436 100644
+index fefe668971..182fc95023 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -186,7 +186,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
+@@ -200,7 +200,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
  
  # 4. Implement
  - Prefer existing files; review as user.
@@ -70,7 +70,7 @@ index 863b25747b..30e891a436 100644
  
  {{#if subagent}}
  # 5. Hand-off
-@@ -246,5 +246,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
+@@ -260,5 +260,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
  <critical>
  - NEVER yield before complete deliverable or while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn.
  - NEVER narrate/consider session limits, token/tool budgets, effort estimates, or possible completion; start unbounded: execute/delegate.

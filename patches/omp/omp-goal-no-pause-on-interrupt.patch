@@ -20,10 +20,10 @@ What must survive a rebase:
   a user who is typing.
 
 diff --git a/packages/coding-agent/src/goals/runtime.ts b/packages/coding-agent/src/goals/runtime.ts
-index c4e7d5e092..774659eb10 100644
+index e296c6fb5b..2d294975d9 100644
 --- a/packages/coding-agent/src/goals/runtime.ts
 +++ b/packages/coding-agent/src/goals/runtime.ts
-@@ -234,25 +234,20 @@ export class GoalRuntime {
+@@ -242,25 +242,20 @@ export class GoalRuntime {
  	}
  
  	async onTaskAborted(options?: { reason?: "interrupted" | "internal" }): Promise<void> {
@@ -58,7 +58,7 @@ index c4e7d5e092..774659eb10 100644
  	}
  
 diff --git a/packages/coding-agent/test/goals/goal-runtime.test.ts b/packages/coding-agent/test/goals/goal-runtime.test.ts
-index 4dfa4171d6..559910c822 100644
+index 82cce7e29a..7853fab752 100644
 --- a/packages/coding-agent/test/goals/goal-runtime.test.ts
 +++ b/packages/coding-agent/test/goals/goal-runtime.test.ts
 @@ -251,7 +251,7 @@ describe("goal runtime", () => {

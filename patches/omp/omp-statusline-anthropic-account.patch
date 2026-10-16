@@ -58,10 +58,10 @@ email is applied there too, sharing one sanitize/truncate helper
 re-landed unchanged in substance at the moved offsets.
 
 diff --git a/packages/coding-agent/src/modes/status-line-host.ts b/packages/coding-agent/src/modes/status-line-host.ts
-index afe5271f2c..a7d81448ca 100644
+index 208af45823..2ccb812f05 100644
 --- a/packages/coding-agent/src/modes/status-line-host.ts
 +++ b/packages/coding-agent/src/modes/status-line-host.ts
-@@ -54,6 +54,22 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
+@@ -55,6 +55,22 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
  	goalStatusInFooter: session => cfgGoalStatusInFooter.get(session.settings ?? settings),
  	activeAccount: (session, provider) =>
  		session.modelRegistry?.authStorage?.oauth.identity(provider, session.sessionId),
@@ -302,10 +302,10 @@ index 0000000000..bd68590ebf
 +	});
 +});
 diff --git a/packages/tui/src/status-line/component.ts b/packages/tui/src/status-line/component.ts
-index 92b28785dd..454f0b3584 100644
+index efb10d518e..61eef3276f 100644
 --- a/packages/tui/src/status-line/component.ts
 +++ b/packages/tui/src/status-line/component.ts
-@@ -731,6 +731,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -796,6 +796,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  	#usageFetchedAt = 0;
  	#usageInFlight = false;
  	#usageStartTimer: Timer | null = null;
@@ -319,7 +319,7 @@ index 92b28785dd..454f0b3584 100644
  	// A timed-out request may still resolve. Its result remains eligible only
  	// until a newer request has applied.
  	#usageRefreshSequence = 0;
-@@ -1877,6 +1884,31 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -1987,6 +1994,31 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		}, STATUS_USAGE_START_DELAY_MS);
  	}
  
@@ -351,7 +351,7 @@ index 92b28785dd..454f0b3584 100644
  	async #runUsageRefresh(session: TSession): Promise<void> {
  		if (this.#disposed || this.session !== session) {
  			this.#usageInFlight = false;
-@@ -2314,6 +2346,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2466,6 +2498,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  
  		// Trigger background fetch (5-min TTL); render uses cached value
  		this.refreshUsageInBackground();
@@ -364,7 +364,7 @@ index 92b28785dd..454f0b3584 100644
  
  		// Get usage statistics
  		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
-@@ -2376,6 +2414,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2530,6 +2568,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  			focusedAgentId: this.#focusedAgentId,
  			sessionAccent: sessionAccentEnabled,
  			previewTitle,
@@ -373,7 +373,7 @@ index 92b28785dd..454f0b3584 100644
  			width,
  			options: segmentOptions ?? {},
 diff --git a/packages/tui/src/status-line/host.ts b/packages/tui/src/status-line/host.ts
-index 3c4e0a4e01..57eb1e6e9f 100644
+index c5517f08c4..f458b7f5a1 100644
 --- a/packages/tui/src/status-line/host.ts
 +++ b/packages/tui/src/status-line/host.ts
 @@ -24,6 +24,8 @@ export interface StatusLineSession {
@@ -407,10 +407,10 @@ index 3c4e0a4e01..57eb1e6e9f 100644
  	fetchUsageReports(session: TSession, signal: AbortSignal): Promise<unknown>;
  	resolveActiveRepo(cwd: string): ActiveRepoContext | null;
 diff --git a/packages/tui/src/status-line/segments.ts b/packages/tui/src/status-line/segments.ts
-index af657188d5..e84032bdcb 100644
+index 2592f4bcd8..b0b547039c 100644
 --- a/packages/tui/src/status-line/segments.ts
 +++ b/packages/tui/src/status-line/segments.ts
-@@ -815,17 +815,35 @@ function costSummary(ctx: SegmentContext): string | undefined {
+@@ -813,17 +813,35 @@ function costSummary(ctx: SegmentContext): string | undefined {
  	);
  }
  
@@ -449,7 +449,7 @@ index af657188d5..e84032bdcb 100644
  };
  
 diff --git a/packages/tui/src/status-line/types.ts b/packages/tui/src/status-line/types.ts
-index 5c5961638d..9720b9da89 100644
+index 14fe693fc7..e5c4637ae8 100644
 --- a/packages/tui/src/status-line/types.ts
 +++ b/packages/tui/src/status-line/types.ts
 @@ -86,6 +86,8 @@ export interface SegmentContext {

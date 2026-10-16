@@ -93,7 +93,7 @@ index a0fb33b24e..849ba9ec82 100644
  		const proc = Bun.spawn([runtime.pythonPath, "-u", scriptPath], {
  			cwd: options.cwd,
 diff --git a/packages/coding-agent/src/eval/py/runner.py b/packages/coding-agent/src/eval/py/runner.py
-index f1f83594bf..2f9be9e584 100644
+index 765bab1fb4..7ff48320d5 100644
 --- a/packages/coding-agent/src/eval/py/runner.py
 +++ b/packages/coding-agent/src/eval/py/runner.py
 @@ -5,7 +5,7 @@ wrapper writes typed frames back.
@@ -105,7 +105,7 @@ index f1f83594bf..2f9be9e584 100644
    {"type": "tool", "id": str, "op": "describe", "names": [str]}
    {"type": "tool", "id": str, "op": "call", "name": str, "args": dict}
    {"type": "exit"}                                # graceful shutdown
-@@ -2030,6 +2030,33 @@ _MANAGED_ENV_KEYS = (
+@@ -2080,6 +2080,33 @@ _MANAGED_ENV_KEYS = (
      "PI_EVAL_LOCAL_ROOTS",
  )
  
@@ -139,7 +139,7 @@ index f1f83594bf..2f9be9e584 100644
  
  def _apply_request_runtime(req: dict) -> None:
      cwd = req.get("cwd")
-@@ -2041,6 +2068,10 @@ def _apply_request_runtime(req: dict) -> None:
+@@ -2091,6 +2118,10 @@ def _apply_request_runtime(req: dict) -> None:
              pass
          sys.path.insert(0, cwd)
  

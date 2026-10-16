@@ -29,27 +29,27 @@ dropped. Test edits re-targeted to the `{ request }` input shape; same
 assertions as before.
 
 diff --git a/packages/coding-agent/src/auto-thinking/classifier.ts b/packages/coding-agent/src/auto-thinking/classifier.ts
-index 638ca3e038..14d2944051 100644
+index 0a1642a3da..8fdff092de 100644
 --- a/packages/coding-agent/src/auto-thinking/classifier.ts
 +++ b/packages/coding-agent/src/auto-thinking/classifier.ts
 @@ -14,7 +14,6 @@
   */
  import type { AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
- import { type ChoiceQuestion, Effort, type Model } from "@oh-my-pi/pi-ai";
+ import { type ChoiceQuestion, Effort, judgeQuestions, type Model, renderQuestion } from "@oh-my-pi/pi-ai";
 -import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
  import type { ModelRegistry } from "../config/model-registry";
- import bucketQuestionInstructions from "../prompts/system/auto-thinking-bucket-question.md" with { type: "text" };
- import levelQuestionTemplate from "../prompts/system/auto-thinking-level-question.md" with { type: "text" };
-@@ -25,8 +24,6 @@ import { clampAutoThinkingEffort } from "@oh-my-pi/pi-tui/thinking";
+ import type { Settings } from "../config/settings";
+ import { type JudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
+@@ -22,8 +21,6 @@ import questionFile from "../prompts/judge/auto-thinking.json" with { type: "jso
+ import { clampAutoThinkingEffort } from "@oh-my-pi/pi-tui/thinking";
  import { preprocessTinyMessage } from "../tiny/message-preproc";
- import { prompt } from "@oh-my-pi/pi-utils";
  
 -import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
 -
  type Level = "low" | "medium" | "high" | "xhigh" | "max";
  type Bucket = "trivial" | "moderate" | "hard";
  
-@@ -115,15 +112,16 @@ export interface ClassifyDifficultyDeps {
+@@ -99,15 +96,16 @@ export interface ClassifyDifficultyDeps {
  }
  
  /**
@@ -74,7 +74,7 @@ index 638ca3e038..14d2944051 100644
  
  /**
   * Classify `input` and return a concrete effort clamped to `deps.model`,
-@@ -153,17 +151,14 @@ export async function classifyDifficulty(
+@@ -137,17 +135,14 @@ export async function classifyDifficulty(
  	const questions = solutionSpace ? SOLUTION_SPACE_QUESTIONS : REQUEST_QUESTIONS;
  	const options = { signal: deps.signal };
  	const classified = await judge.withCandidate(async (candidate, kind) => {

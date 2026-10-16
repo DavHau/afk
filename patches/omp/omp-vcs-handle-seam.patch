@@ -336,10 +336,10 @@ index ca5ef1d532..cec26ccce1 100644
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch (applyErr) {
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index b9e41e62e4..c7194f4d83 100644
+index a86eb9bc3b..d1a8c040d5 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -900,7 +900,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -859,7 +859,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		) {
  			const outcome = await mergeIsolatedChanges({
  				result,
@@ -348,7 +348,7 @@ index b9e41e62e4..c7194f4d83 100644
  				mergeMode: policy.mergeMode,
  			});
  			mergeSummary = outcome.summary;
-@@ -908,7 +908,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -867,7 +867,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  			if (outcome.changesApplied !== false) {
  				const nestedPatchSummary = await applyEligibleNestedPatches({
  					result,
@@ -552,7 +552,7 @@ index 0000000000..40bf9d7669
 +	return new GitCheckoutHandle(root);
 +}
 diff --git a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
-index ceb3ad4c89..ae35814cf9 100644
+index b32e4ea421..46866d1056 100644
 --- a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 +++ b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 @@ -22,6 +22,7 @@ import * as taskExecutor from "../../src/task/executor";
@@ -563,7 +563,7 @@ index ceb3ad4c89..ae35814cf9 100644
  import type { AgentProgress, SingleResult, StructuredSubagentOutput } from "@oh-my-pi/pi-tui/tools/task";
  import type { ToolSession } from "../../src/tools";
  
-@@ -1067,7 +1068,10 @@ describe("runEvalAgent isolation", () => {
+@@ -1060,7 +1061,10 @@ describe("runEvalAgent isolation", () => {
  
  	function mockIsolationContext(): { repoRoot: string } {
  		const repoRoot = "/repo-root";
@@ -575,7 +575,7 @@ index ceb3ad4c89..ae35814cf9 100644
  		return { repoRoot };
  	}
  
-@@ -1190,6 +1194,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1183,6 +1187,7 @@ describe("runEvalAgent isolation", () => {
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
  			ops.push("prepare");
  			return {

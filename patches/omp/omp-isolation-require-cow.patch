@@ -71,10 +71,10 @@ index e6d2764fb4..fa5107cdda 100644
  		const isolationBackend = handle.backend;
  		const vcs = opts.context.vcs;
 diff --git a/packages/coding-agent/src/task/settings.ts b/packages/coding-agent/src/task/settings.ts
-index 4580cac4de..06b21f3817 100644
+index 988e48c079..0653d1e816 100644
 --- a/packages/coding-agent/src/task/settings.ts
 +++ b/packages/coding-agent/src/task/settings.ts
-@@ -70,6 +70,20 @@ export const cfgIsolationBackend = register({
+@@ -73,6 +73,20 @@ export const cfgIsolationBackend = register({
  	},
  });
  
@@ -96,10 +96,10 @@ index 4580cac4de..06b21f3817 100644
  	id: "worktree.clone",
  	protocolDefault: ["rpc", "acp"],
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index c7194f4d83..45e2afe6ca 100644
+index d1a8c040d5..f55f26b1bb 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -73,6 +73,7 @@ import {
+@@ -70,6 +70,7 @@ import {
  	cfgTaskIsolationApply,
  	cfgTaskIsolationEnabled,
  	cfgTaskIsolationMerge,
@@ -107,7 +107,7 @@ index c7194f4d83..45e2afe6ca 100644
  	cfgTaskMaxRecursionDepth,
  } from "./settings";
  
-@@ -873,6 +874,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -832,6 +833,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  				baseOptions,
  				context: isolationContext,
  				preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
@@ -116,10 +116,10 @@ index c7194f4d83..45e2afe6ca 100644
  				mergeMode: policy.mergeMode,
  				artifactsDir: lease.artifactsDir,
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 7e702c3899..9237c6805f 100644
+index 33edb6f2ee..0c7f81713f 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -555,11 +555,16 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
+@@ -620,11 +620,16 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
   * Snapshot `repoRoot` into a CoW isolation mount. `repoRoot` must already be
   * the VCS-resolved workspace root ({@link VcsHandle.root} — git checkout or
   * jj workspace); resolution/gating happens in `resolveVcsHandle`, not here.
@@ -136,7 +136,7 @@ index 7e702c3899..9237c6805f 100644
  ): Promise<IsolationHandle> {
  	const sourceCommonDir = vcs.git(repoRoot)?.info().commonDir ?? path.join(repoRoot, ".git");
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
-@@ -587,7 +592,7 @@ export async function ensureIsolation(
+@@ -652,7 +657,7 @@ export async function ensureIsolation(
  		await fs.mkdir(baseDir, { recursive: true });
  		await writeIsolationOwner(baseDir, id);
  		try {
@@ -182,15 +182,15 @@ index a13f8ed380..a5cd7f584f 100644
  			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
  		});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 87c322fa54..e426384ac4 100644
+index 7ee2165216..3738635147 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -291,6 +291,36 @@ describe("worktree isolation helpers", () => {
+@@ -293,6 +293,36 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fellBack).toBe(false);
  		});
  
 +		it("forwards requireCow to the backend as start options", async () => {
-+			vi.spyOn(natives, "isoResolve").mockReturnValue({
++			vi.spyOn(natives, "isoResolve").mockResolvedValue({
 +				kind: natives.IsoBackendKind.LinuxReflink,
 +				candidates: [natives.IsoBackendKind.LinuxReflink],
 +				fellBack: false,
@@ -206,7 +206,7 @@ index 87c322fa54..e426384ac4 100644
 +		});
 +
 +		it("passes null start options when requireCow is off", async () => {
-+			vi.spyOn(natives, "isoResolve").mockReturnValue({
++			vi.spyOn(natives, "isoResolve").mockResolvedValue({
 +				kind: natives.IsoBackendKind.LinuxReflink,
 +				candidates: [natives.IsoBackendKind.LinuxReflink],
 +				fellBack: false,
@@ -222,7 +222,7 @@ index 87c322fa54..e426384ac4 100644
  		it("snapshots a pure jj workspace without VCS gating", async () => {
  			// Regression: ensureIsolation used to re-resolve the root via
  			// getRepoRoot, re-imposing the git gate that resolveVcsHandle had
-@@ -309,7 +339,7 @@ describe("worktree isolation helpers", () => {
+@@ -311,7 +341,7 @@ describe("worktree isolation helpers", () => {
  
  			const handle = await ensureIsolation(jjWs, "pure-jj-no-gate");
  

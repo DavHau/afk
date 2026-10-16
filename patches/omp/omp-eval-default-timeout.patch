@@ -12,7 +12,7 @@ What must survive a rebase:
   `timeout` values and `timeout: 0` behave as upstream.
 
 diff --git a/packages/coding-agent/src/tools/tool-timeouts.ts b/packages/coding-agent/src/tools/tool-timeouts.ts
-index 3f97133..36f94fa 100644
+index cb17e3d102..954f2227f8 100644
 --- a/packages/coding-agent/src/tools/tool-timeouts.ts
 +++ b/packages/coding-agent/src/tools/tool-timeouts.ts
 @@ -9,7 +9,7 @@ export interface ToolTimeoutConfig {

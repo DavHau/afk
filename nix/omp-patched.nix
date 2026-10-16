@@ -31,7 +31,15 @@
 # temp-index task commits, and made TaskTool forward schema failures to
 # execute() via lenientArgValidation — required-flag now also rejects a
 # missing `isolated` at dispatch; omp-task-private-eval-kernel was dropped
-# as absorbed) in patches/omp/.
+# as absorbed), then 18.11.1 (upstream reverted per-call task `model`
+# selectors — required-flag lost its model-validation context; task.structured
+# gates schemaMode in the task prompt; the auto-thinking classifier moved to
+# judge question files; ensureIsolation awaits isoResolve and now detaches
+# submodules, which the jj-workspace patch skips for pure jj workspaces with
+# no git checkout; SessionAffinity gained session restrictions ahead of the
+# weekly-reset patch's CredentialBlocks argument; eval cells accept more
+# languages than py/js; pi-iso's reflink tree walk moved behind tree::TreeCopy)
+# in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -128,7 +136,8 @@
 #   warm session pin (upstream skips ranking for an hour after each use, so
 #   a busy session never noticed a sibling's weekly window rolling over
 #   first); the pin only moves when the reset order changed, and fresh
-#   manual pins are exempt.
+#   manual pins are exempt. Retargets upstream's blocked-explicit-pin codex
+#   test to re-block the pinned row after each manual pin.
 # - omp-statusline-anthropic-account: the cost segment appends the
 #   session-sticky Anthropic OAuth account email (dimmed, 40-col truncated)
 #   so the TUI shows which account a multi-subscription session is billed

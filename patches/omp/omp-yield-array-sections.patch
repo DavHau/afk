@@ -48,10 +48,10 @@ index 2f5df15048..ec8425b789 100644
  {{#unless workPoolItems}}
  {{#if hasOutputSchema}}
 diff --git a/packages/coding-agent/src/tools/output-schema-validator.ts b/packages/coding-agent/src/tools/output-schema-validator.ts
-index 863655fc63..e47bc18db2 100644
+index 3b7c879a9d..017c8e5010 100644
 --- a/packages/coding-agent/src/tools/output-schema-validator.ts
 +++ b/packages/coding-agent/src/tools/output-schema-validator.ts
-@@ -23,15 +23,17 @@ export interface OutputValidator {
+@@ -24,15 +24,17 @@ export interface OutputValidator {
  	validate(value: unknown): JsonSchemaValidationResult;
  	/** Treat strict-provider nulls for optional non-nullable properties as omitted before validation and delivery. */
  	normalize(value: unknown): unknown;
@@ -73,7 +73,7 @@ index 863655fc63..e47bc18db2 100644
  	 */
  	readonly validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
  	/** Whether top-level schema closure makes unknown incremental yield labels invalid. */
-@@ -98,8 +100,8 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
+@@ -129,8 +131,8 @@ function buildOutputValidatorUncached(schema: unknown): BuildOutputValidatorResu
  	const sectionLabels = buildSectionLabelMetadata(labelSchema);
  	const sectionSchemas = buildSectionSchemas(labelSchema);
  	const sectionValidators = new Map<string, (value: unknown) => JsonSchemaValidationResult>();
@@ -84,7 +84,7 @@ index 863655fc63..e47bc18db2 100644
  	}
  	return {
  		normalized,
-@@ -108,7 +110,8 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
+@@ -139,7 +141,8 @@ function buildOutputValidatorUncached(schema: unknown): BuildOutputValidatorResu
  			requiredFields: required,
  			validate: value => validateJsonSchemaValue(jsonSchemaRecord, value),
  			normalize: value => normalizeStrictOutput(value, labelSchema),
@@ -94,7 +94,7 @@ index 863655fc63..e47bc18db2 100644
  			validateSection: sectionValidators,
  			rejectUnknownSections: sectionLabels.rejectUnknownSections,
  			knownSectionLabels: sectionLabels.labels,
-@@ -117,9 +120,19 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
+@@ -148,9 +151,19 @@ function buildOutputValidatorUncached(schema: unknown): BuildOutputValidatorResu
  	};
  }
  
@@ -117,7 +117,7 @@ index 863655fc63..e47bc18db2 100644
  	const properties = jsonSchema.properties;
  	if (!isRecord(properties)) return schemas;
  	for (const label in properties) {
-@@ -128,13 +141,18 @@ function buildSectionSchemas(jsonSchema: Record<string, unknown>): ReadonlyMap<s
+@@ -159,13 +172,18 @@ function buildSectionSchemas(jsonSchema: Record<string, unknown>): ReadonlyMap<s
  		schemas.set(
  			label,
  			propRecord?.type === "array" && propRecord.items !== undefined && propRecord.items !== null
@@ -139,10 +139,10 @@ index 863655fc63..e47bc18db2 100644
  function normalizeStrictOutput(value: unknown, schema: unknown): unknown {
  	if (!isRecord(schema)) return value;
 diff --git a/packages/coding-agent/test/tools/output-schema-validator.test.ts b/packages/coding-agent/test/tools/output-schema-validator.test.ts
-index 8a82e1180f..e9a0b95958 100644
+index 4869a6a011..58dbb03ebd 100644
 --- a/packages/coding-agent/test/tools/output-schema-validator.test.ts
 +++ b/packages/coding-agent/test/tools/output-schema-validator.test.ts
-@@ -82,7 +82,7 @@ describe("buildOutputValidator", () => {
+@@ -91,7 +91,7 @@ describe("buildOutputValidator", () => {
  		expect(validator?.validate({ name: null, receipt: null }).success).toBe(false);
  	});
  
@@ -151,7 +151,7 @@ index 8a82e1180f..e9a0b95958 100644
  		const { validator } = buildOutputValidator({
  			properties: {
  				overall_correctness: { enum: ["correct", "incorrect"] },
-@@ -105,9 +105,11 @@ describe("buildOutputValidator", () => {
+@@ -114,9 +114,11 @@ describe("buildOutputValidator", () => {
  		// String property: any string passes, non-strings fail.
  		expect(sections?.get("explanation")?.("ok").success).toBe(true);
  		expect(sections?.get("explanation")?.(123).success).toBe(false);
@@ -166,10 +166,10 @@ index 8a82e1180f..e9a0b95958 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index 0c80ef63d2..b103962b86 100644
+index afcb3d4ddd..5d223d74ad 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
-@@ -440,6 +440,55 @@ describe("YieldTool", () => {
+@@ -491,6 +491,55 @@ describe("YieldTool", () => {
  		).rejects.toThrow(/Section "findings" does not match schema.*body/);
  	});
  
