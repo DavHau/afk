@@ -41,6 +41,54 @@ let
         install -Dm444 ${../profile/python/afk_run.py} $out/${ps.python.sitePackages}/afk_run.py
       ''
     );
+
+  # polars from the PyPI wheels on x86_64 while nixpkgs' rustc links LLVM 21:
+  # LLVM 21 miscompiles the x86 lowering of minimumnum/maximumnum
+  # (llvm/llvm-project#147193, fixed by #164546 in LLVM 22, never backported
+  # to 21.1.x), so the source-built polars returns wrong float max/min
+  # (`pl.Series(range(64), dtype=pl.Float64).max()` gives 7.0). The upstream
+  # wheels are built with a rustc on LLVM 22 and are correct. The override
+  # drops out by itself once nixpkgs' rustc moves to LLVM >= 22; delete it
+  # then.
+  polarsWheelNeeded =
+    pkgs.stdenv.hostPlatform.isx86_64 && lib.versionOlder pkgs.rustc.unwrapped.llvm.version "22";
+  polarsFromWheels =
+    ps:
+    let
+      version = "1.42.1";
+      runtime = ps.buildPythonPackage {
+        pname = "polars-runtime-32";
+        inherit version;
+        format = "wheel";
+        src = pkgs.fetchPypi {
+          pname = "polars_runtime_32";
+          inherit version;
+          format = "wheel";
+          dist = "cp310";
+          python = "cp310";
+          abi = "abi3";
+          platform = "manylinux_2_17_x86_64.manylinux2014_x86_64";
+          hash = "sha256-0Fno5TzBFP+C+b15H9NB3FNTSix0Xm9qo3WUw6k/Af4=";
+        };
+        nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+        buildInputs = [ pkgs.stdenv.cc.cc.lib ];
+      };
+    in
+    ps.buildPythonPackage {
+      pname = "polars";
+      inherit version;
+      format = "wheel";
+      src = pkgs.fetchPypi {
+        pname = "polars";
+        inherit version;
+        format = "wheel";
+        dist = "py3";
+        python = "py3";
+        hash = "sha256-PAxlzfohpiFlDEvcu8z5OWTQUv12bD5w6EpV2WHCWf0=";
+      };
+      dependencies = [ runtime ];
+      pythonImportsCheck = [ "polars" ];
+    };
 in
 (pkgs.python3.withPackages (
   ps: with ps; [
@@ -49,7 +97,7 @@ in
     # The libraries afk sessions reach for in eval cells, most used first
     # (import and ModuleNotFoundError counts across the afk session
     # transcripts, 2026-09).
-    polars
+    (if polarsWheelNeeded then polarsFromWheels ps else polars)
     numpy
     httpx
     scipy
