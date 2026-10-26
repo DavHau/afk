@@ -5,7 +5,9 @@ What must survive a rebase:
   providers.autoThinkingMaxEffort, which only chooses xhigh vs max — so the
   distro cap is a fixed Effort.High ceiling (AUTO_EFFORT_CEILING since
   18.6.0; autoEffortCeiling() before) for both the online and the
-  local-classifier branch, and the max question is never offered.
+  local-classifier branch, and the max question is never offered (since
+  18.12.6 the online ladder is also filtered to tiers at or below the
+  ceiling, so xhigh is not offered either).
 - Explicit selections are untouched: a pinned level, and the `ultrathink`
   keyword (clamped at its own call site), still reach the model's max.
 
@@ -28,19 +30,30 @@ getSupportedEfforts / cfgProvidersAutoThinkingMaxEffort imports are
 dropped. Test edits re-targeted to the `{ request }` input shape; same
 assertions as before.
 
+Rebased 18.11.1 -> 18.12.6: upstream filters the online ladder question to
+the target model's supported tiers (filterSupportedLevels) and short-circuits
+without a judge when zero or one tier remains. The ladder filter now also
+drops tiers above AUTO_EFFORT_CEILING, so the short-circuits stay correct
+under the high cap (e.g. `["xhigh", "max"]` resolves nothing instead of
+xhigh) and the judge is offered low/medium/high only; an `xhigh` answer is
+now off-ladder and rejects. Tests: the xhigh-caps-at-high case becomes
+"never offers xhigh" (xhigh rejects, high resolves) plus an xhigh-and-up
+ladder case; upstream's new sparse-ladder prompt test and the solution-space
+test answer `high` instead of `max`/`xhigh`.
+
 diff --git a/packages/coding-agent/src/auto-thinking/classifier.ts b/packages/coding-agent/src/auto-thinking/classifier.ts
-index 0a1642a3da..8fdff092de 100644
+index 9e50d496a9..5c69824c94 100644
 --- a/packages/coding-agent/src/auto-thinking/classifier.ts
 +++ b/packages/coding-agent/src/auto-thinking/classifier.ts
-@@ -14,7 +14,6 @@
+@@ -16,6 +16,7 @@
   */
  import type { AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
  import { type ChoiceQuestion, Effort, judgeQuestions, type Model, renderQuestion } from "@oh-my-pi/pi-ai";
--import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
++import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
  import type { ModelRegistry } from "../config/model-registry";
  import type { Settings } from "../config/settings";
- import { type JudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
-@@ -22,8 +21,6 @@ import questionFile from "../prompts/judge/auto-thinking.json" with { type: "jso
+@@ -24,8 +25,6 @@ import questionFile from "../prompts/judge/auto-thinking.json" with { type: "jso
  import { clampAutoThinkingEffort } from "@oh-my-pi/pi-tui/thinking";
  import { preprocessTinyMessage } from "../tiny/message-preproc";
  
@@ -49,7 +62,24 @@ index 0a1642a3da..8fdff092de 100644
  type Level = "low" | "medium" | "high" | "xhigh" | "max";
  type Bucket = "trivial" | "moderate" | "hard";
  
-@@ -99,15 +96,16 @@ export interface ClassifyDifficultyDeps {
+@@ -82,12 +81,14 @@ interface SupportedLevelQuestion {
+ 	levels: Level[];
+ }
+ 
+-/** Keep the judge's choices aligned with the effort surface the target can use. */
++/** Keep the judge's choices aligned with the effort surface the target can use under `ceiling`. */
+ function filterSupportedLevels(
+ 	question: ChoiceQuestion<Level> | ChoiceQuestion<Exclude<Level, "max">>,
+ 	model: Model,
++	ceiling: Effort,
+ ): SupportedLevelQuestion {
+-	const supported = getSupportedEfforts(model);
++	const ceilingIndex = THINKING_EFFORTS.indexOf(ceiling);
++	const supported = getSupportedEfforts(model).filter(effort => THINKING_EFFORTS.indexOf(effort) <= ceilingIndex);
+ 	const criteria: Record<string, string | null> = {};
+ 	const levels: Level[] = [];
+ 	for (const [label, rubric] of Object.entries(question.criteria)) {
+@@ -127,15 +128,17 @@ export interface ClassifyDifficultyDeps {
  }
  
  /**
@@ -59,12 +89,13 @@ index 0a1642a3da..8fdff092de 100644
 - * `ultrathink` reaches {@link Effort.Max}.
 + * Highest effort a classification may resolve to.
 + *
-+ * Distro policy: `auto` tops out at {@link Effort.High}, so the `max` question
-+ * is never offered. xhigh doubles the reasoning budget for a bucket a cheap
-+ * classifier picks unsupervised; an explicit selection (a pinned level, or the
-+ * `ultrathink` keyword, which clamps at its own call site) still reaches the
-+ * model's ceiling. Upstream's `providers.autoThinkingMaxEffort` setting only
-+ * chooses between xhigh and max, so the cap lives here and that setting is inert.
++ * Distro policy: `auto` tops out at {@link Effort.High}, so neither `max` nor
++ * `xhigh` is offered to the judge. xhigh doubles the reasoning budget for a
++ * bucket a cheap classifier picks unsupervised; an explicit selection (a pinned
++ * level, or the `ultrathink` keyword, which clamps at its own call site) still
++ * reaches the model's ceiling. Upstream's `providers.autoThinkingMaxEffort`
++ * setting only chooses between xhigh and max, so the cap lives here and that
++ * setting is inert.
   */
 -function autoEffortCeiling(deps: ClassifyDifficultyDeps): Effort {
 -	if (cfgProvidersAutoThinkingMaxEffort.get(deps.settings) !== Effort.Max) return Effort.XHigh;
@@ -74,31 +105,41 @@ index 0a1642a3da..8fdff092de 100644
  
  /**
   * Classify `input` and return a concrete effort clamped to `deps.model`,
-@@ -137,17 +135,14 @@ export async function classifyDifficulty(
+@@ -165,23 +168,23 @@ export async function classifyDifficulty(
+ 		: { request: preprocessTinyMessage(input.request) };
  	const questions = solutionSpace ? SOLUTION_SPACE_QUESTIONS : REQUEST_QUESTIONS;
  	const options = { signal: deps.signal };
+-	const ceiling = autoEffortCeiling(deps);
+-	const level = filterSupportedLevels(ceiling === Effort.Max ? questions.levelWithMax : questions.level, deps.model);
++	const ceiling = AUTO_EFFORT_CEILING;
++	const level = filterSupportedLevels(questions.level, deps.model, ceiling);
+ 	const [onlyLevel, ...otherLevels] = level.levels;
+ 	// One eligible tier below Max is the answer every candidate reaches (the local
+ 	// bucket clamps into the same pool), so it needs no judge and no judge credential.
+ 	if (onlyLevel !== undefined && otherLevels.length === 0 && onlyLevel !== "max") return LEVEL_EFFORT[onlyLevel];
+ 	// With no online tier, every candidate lands in the same place: the local
+-	// bucket's XHigh-capped pool, which is empty (`["max"]`) or holds only a
+-	// sub-Low tier (`["minimal"]`).
+-	if (onlyLevel === undefined) return clampAutoThinkingEffort(deps.model, Effort.Low, Effort.XHigh);
++	// bucket's ceiling-capped pool, which is empty (`["max"]`, `["xhigh", "max"]`)
++	// or holds only a sub-Low tier (`["minimal"]`).
++	if (onlyLevel === undefined) return clampAutoThinkingEffort(deps.model, Effort.Low, ceiling);
  	const classified = await judge.withCandidate(async (candidate, kind) => {
 -		// The 3-bucket local question cannot select `max`, so its ceiling stays at
 -		// XHigh whatever the setting says — otherwise a sparse ladder would snap its
 -		// `hard` bucket up to a tier it never chose.
 +		// Distro policy caps both paths at high (see AUTO_EFFORT_CEILING); the
-+		// 3-bucket local question cannot select `max` anyway.
++		// 3-bucket local question cannot select `max` anyway, and its `hard`
++		// bucket must not snap up to a tier above the ceiling.
  		if (kind === "local") {
  			const { answers } = await candidate.judge({ state, questions: { bucket: questions.bucket } }, options);
 -			return { effort: BUCKET_EFFORT[answers.bucket.choice], ceiling: Effort.XHigh };
-+			return { effort: BUCKET_EFFORT[answers.bucket.choice], ceiling: AUTO_EFFORT_CEILING };
++			return { effort: BUCKET_EFFORT[answers.bucket.choice], ceiling };
  		}
--		const ceiling = autoEffortCeiling(deps);
--		const level = ceiling === Effort.Max ? questions.levelWithMax : questions.level;
--		const { answers } = await candidate.judge({ state, questions: { level } }, options);
--		return { effort: LEVEL_EFFORT[answers.level.choice], ceiling };
-+		const { answers } = await candidate.judge({ state, questions: { level: questions.level } }, options);
-+		return { effort: LEVEL_EFFORT[answers.level.choice], ceiling: AUTO_EFFORT_CEILING };
- 	}, options);
- 	// The successful branch's ceiling goes into the clamp itself: capping the
- 	// request alone is not enough, because a sparse ladder snaps an excluded
+ 		if (otherLevels.length === 0) return { effort: LEVEL_EFFORT[onlyLevel], ceiling };
+ 		const { answers } = await candidate.judge({ state, questions: { level: level.question } }, options);
 diff --git a/packages/coding-agent/test/auto-thinking-classifier.test.ts b/packages/coding-agent/test/auto-thinking-classifier.test.ts
-index 8537cc4056..702ac5a0b9 100644
+index e283699028..9388f388a4 100644
 --- a/packages/coding-agent/test/auto-thinking-classifier.test.ts
 +++ b/packages/coding-agent/test/auto-thinking-classifier.test.ts
 @@ -71,7 +71,8 @@ describe("auto thinking classifier helpers", () => {
@@ -120,8 +161,18 @@ index 8537cc4056..702ac5a0b9 100644
  		// The local backend only ever emits trivial/moderate/hard, so a sparse
  		// ladder must not let the opt-in ceiling snap `hard` up to a tier the
  		// on-device model never selected. `max` is the model's only tier at or
-@@ -290,24 +291,31 @@ describe("auto thinking classifier helpers", () => {
- 		});
+@@ -236,7 +237,8 @@ describe("auto thinking classifier helpers", () => {
+ 	const XHIGH_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
+ 
+ 	it("classifies a delegated turn from its solution space alone, falling back to the request when blank", async () => {
+-		const fixture = createOnlineFixture(buildLadderModel("mock-xhigh", XHIGH_LADDER), "xhigh");
++		// `high`: the distro ceiling never offers xhigh, which would reject.
++		const fixture = createOnlineFixture(buildLadderModel("mock-xhigh", XHIGH_LADDER), "high");
+ 		// State rides the user message; the system prompt names the field in its instructions.
+ 		const judgeState = (call: number) => JSON.stringify(fixture.completeSimpleMock.mock.calls[call]?.[1].messages);
+ 
+@@ -297,34 +299,56 @@ describe("auto thinking classifier helpers", () => {
+ 		await expect(classifyDifficulty({ request: "choose a retry policy" }, fixture.deps)).rejects.toThrow();
  	});
  
 -	it("resolves max only when opted in, and rejects it as off-ladder otherwise", async () => {
@@ -131,9 +182,7 @@ index 8537cc4056..702ac5a0b9 100644
 +		// (the caller keeps its provisional level) rather than crossing the cap.
  		const optedIn = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "max", "max");
 -		expect(await classifyDifficulty({ request: "untangle this cross-service race" }, optedIn.deps)).toBe(Effort.Max);
-+		await expect(
-+			classifyDifficulty({ request: "untangle this cross-service race" }, optedIn.deps),
-+		).rejects.toThrow();
++		await expect(classifyDifficulty({ request: "untangle this cross-service race" }, optedIn.deps)).rejects.toThrow();
  
  		vi.restoreAllMocks();
  
@@ -149,9 +198,25 @@ index 8537cc4056..702ac5a0b9 100644
 -	it("resolves the sparse ladder's max tier when opted in", async () => {
 -		const fixture = createOnlineFixture(buildLadderModel("mock-sparse", [Effort.High, Effort.Max]), "max", "max");
 -		expect(await classifyDifficulty({ request: "cut over the storage layer" }, fixture.deps)).toBe(Effort.Max);
-+	it("caps an xhigh classification at high", async () => {
++	it("never offers xhigh: the distro ceiling is high", async () => {
++		// The question tops out at high, so an `xhigh` answer is off-ladder and
++		// rejects (the caller keeps its provisional level) rather than crossing the cap.
 +		const fixture = createOnlineFixture(buildLadderModel("mock-xhigh", XHIGH_LADDER), "xhigh");
-+		expect(await classifyDifficulty({ request: "rewrite the scheduler" }, fixture.deps)).toBe(Effort.High);
++		await expect(classifyDifficulty({ request: "rewrite the scheduler" }, fixture.deps)).rejects.toThrow();
++		expect(JSON.stringify(fixture.completeSimpleMock.mock.calls[0]?.[1])).not.toContain("xhigh");
++
++		vi.restoreAllMocks();
++
++		const capped = createOnlineFixture(buildLadderModel("mock-xhigh", XHIGH_LADDER), "high");
++		expect(await classifyDifficulty({ request: "rewrite the scheduler" }, capped.deps)).toBe(Effort.High);
++	});
++
++	it("resolves no level on an xhigh-and-up ladder", async () => {
++		// `["xhigh", "max"]` has nothing at or below the distro ceiling: no judge request.
++		const fixture = createOnlineFixture(buildLadderModel("mock-xm", [Effort.XHigh, Effort.Max]), "xhigh", "max");
++		const keyless = { ...fixture.deps, registry: createRegistry([fixture.classifierModel]) };
++		expect(await classifyDifficulty({ request: "cut over the storage layer" }, keyless)).toBeUndefined();
++		expect(fixture.completeSimpleMock).not.toHaveBeenCalled();
 +	});
 +
 +	it("resolves the sparse ladder's high tier even when opted in to max", async () => {
@@ -159,19 +224,33 @@ index 8537cc4056..702ac5a0b9 100644
 +		expect(await classifyDifficulty({ request: "cut over the storage layer" }, fixture.deps)).toBe(Effort.High);
  	});
  
- 	it("takes the first label when the classifier echoes several", async () => {
-@@ -321,8 +329,8 @@ describe("auto thinking classifier helpers", () => {
+ 	it("keeps the judge prompt free of tiers the sparse ladder does not offer", async () => {
+-		// Without `xhigh` on the ladder, `max` must still be decidable from its own rubric.
++		// Without `xhigh` on the ladder, `high` must still be decidable from its own
++		// rubric; the distro ceiling keeps `max` out even when opted in.
+ 		const fixture = createOnlineFixture(
+ 			buildLadderModel("mock-low-high-max", [Effort.Low, Effort.High, Effort.Max]),
+-			"max",
++			"high",
+ 			"max",
+ 		);
+-		expect(await classifyDifficulty({ request: "cut over the storage layer" }, fixture.deps)).toBe(Effort.Max);
++		expect(await classifyDifficulty({ request: "cut over the storage layer" }, fixture.deps)).toBe(Effort.High);
+ 		expect(JSON.stringify(fixture.completeSimpleMock.mock.calls[0]?.[1])).not.toContain("xhigh");
+ 	});
+ 
+@@ -339,8 +363,8 @@ describe("auto thinking classifier helpers", () => {
  		expect(await classifyDifficulty({ request: "rename a helper" }, fixture.deps)).toBe(Effort.Low);
  	});
  
 -	it("resolves no level on a max-only ladder without opt-in", async () => {
--		// `["max"]` has nothing at or below the default ceiling, so the model clamp
+-		// `["max"]` has nothing at or below the default ceiling, so auto yields
 +	it("resolves no level on a max-only ladder, opt-in or not", async () => {
-+		// `["max"]` has nothing at or below the distro ceiling, so the model clamp
- 		// must not snap the request back up — auto yields nothing and the session
- 		// keeps its current level.
++		// `["max"]` has nothing at or below the distro ceiling, so auto yields
+ 		// nothing without consulting the judge (or needing its credential) and the
+ 		// session keeps its current level.
  		const defaulted = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "xhigh");
-@@ -330,8 +338,8 @@ describe("auto thinking classifier helpers", () => {
+@@ -350,8 +374,8 @@ describe("auto thinking classifier helpers", () => {
  
  		vi.restoreAllMocks();
  

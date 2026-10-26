@@ -336,10 +336,10 @@ index ca5ef1d532..cec26ccce1 100644
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch (applyErr) {
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index a86eb9bc3b..d1a8c040d5 100644
+index 26dd635938..f830cd0427 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -859,7 +859,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -914,7 +914,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		) {
  			const outcome = await mergeIsolatedChanges({
  				result,
@@ -348,7 +348,7 @@ index a86eb9bc3b..d1a8c040d5 100644
  				mergeMode: policy.mergeMode,
  			});
  			mergeSummary = outcome.summary;
-@@ -867,7 +867,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -922,7 +922,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  			if (outcome.changesApplied !== false) {
  				const nestedPatchSummary = await applyEligibleNestedPatches({
  					result,
@@ -651,10 +651,10 @@ index 8737b925d9..5f2299c755 100644
  				isolated: true,
 diff --git a/packages/coding-agent/test/task/vcs.test.ts b/packages/coding-agent/test/task/vcs.test.ts
 new file mode 100644
-index 0000000000..0760f0e404
+index 0000000000..5a7a50fa1f
 --- /dev/null
 +++ b/packages/coding-agent/test/task/vcs.test.ts
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,95 @@
 +/**
 + * Behavior tests for the VCS seam (`resolveVcsHandle`): isolated-task capture
 + * and merge-back go through a `VcsHandle` so backends other than a plain git
@@ -732,10 +732,11 @@ index 0000000000..0760f0e404
 +
 +	it.skipIf(!jjAvailable)("rejects a pure jj secondary workspace with colocation guidance", async () => {
 +		// `jj workspace add` secondary workspaces carry `.jj/repo` as a pointer
-+		// file and never get a `.git/` — the realistic pure-jj shape (jj >= 0.34
-+		// colocates `jj git init` by default).
++		// file. The main repo is non-colocated: jj >= 0.34 colocates `jj git init`
++		// by default, and jj >= 0.46 then gives secondary workspaces a git
++		// worktree `.git` file too — only a non-colocated store keeps them pure jj.
 +		const main = await tempDir("omp-vcs-jjmain-");
-+		await run(main, ["jj", "git", "init"]);
++		await run(main, ["jj", "git", "init", "--no-colocate"]);
 +		const ws = path.join(path.dirname(main), `${path.basename(main)}-ws2`);
 +		await run(main, ["jj", "workspace", "add", ws]);
 +		tempDirs.push(ws);

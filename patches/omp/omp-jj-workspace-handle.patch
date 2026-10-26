@@ -44,13 +44,13 @@ tests were reworked for the new baseline API (incl. a drift check); the
 conflict test probes the parked ref directly.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 12f5b6d038..00b3a6f0d6 100644
+index 955d93facb..4102c9c21a 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -130,6 +130,7 @@ Artifacts and side channels:
+@@ -136,6 +136,7 @@ Artifacts and side channels:
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Speculative launch (`task.speculativeLaunch`, default on; batch mode only) — while a `{ context, tasks[] }` call streams, the tool's stream session (`src/task/speculative-launch.ts`) starts each item's `SpawnRun` as soon as that item's JSON object closes (`context` must already have closed), and starts the remainder when the call finishes streaming. Dispatch adopts runs whose normalized spawn params still match; an invalid finished call, launched items that differ from the finished call, a blocking hook, or an aborted turn aborts every launched run. Launches need host authorization (`authorizeLaunch`): auto-allowed `task` approval and no extension `tool_call`/`tool_result`/approval lifecycle handlers.
- - Isolation is enabled with `task.isolation.enabled`; `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
+ - Isolation is available when `task.isolation.enabled` is true: each task must set `isolated: true` to use a separate checkout; omitted or `false` tasks share the parent checkout. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
 +- Workspace resolution: a git checkout uses the git machinery above; a pure jj workspace (`jj workspace add` secondary, or non-colocated repo) runs capture against jj's backing git store (baseline = the isolation copy's tree on top of the `@` commit, task refs parked as `refs/omp/task/<id>` in the store) and lands merges as a described jj commit — 3-way merged in-store via `git merge-tree`, so a conflict leaves the workspace untouched and the ref parked. The snapshot's `.jj` pointer is removed before the subagent runs, so nothing inside isolation can write through to the shared store. Nested git repos under a jj workspace are not captured.
  - Isolation merge strategy: `task.isolation.merge` selects patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command). `task.isolation.apply=false` retains captured changes without applying them; nested repositories get separate patch artifacts.
  - Eval-defined tools: `tools` resolves names across the parent's retained Python/JS kernels. Unknown names, disabled sharing, or the same name defined in both kernels fail preflight; these tools are not available in plan mode.
@@ -555,10 +555,10 @@ index 40bf9d7669..756f50813c 100644
  	return new GitCheckoutHandle(root);
  }
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 811ac07cd7..76ea0315fd 100644
+index 816f3a09f5..0a8c074952 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -616,13 +616,17 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
+@@ -645,13 +645,17 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
  	}
  }
  
@@ -579,7 +579,7 @@ index 811ac07cd7..76ea0315fd 100644
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
  	const resolution = await natives.isoResolve(preferred ?? null);
-@@ -647,7 +651,8 @@ export async function ensureIsolation(
+@@ -676,7 +680,8 @@ export async function ensureIsolation(
  			// task's git operations would mutate the parent checkout and stack
  			// parallel task branches. Detaching gives each isolation a private,
  			// frozen repo that still borrows the source object DB via alternates.
@@ -723,7 +723,7 @@ index 0000000000..a13f8ed380
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/vcs.test.ts b/packages/coding-agent/test/task/vcs.test.ts
-index 0760f0e404..97afe95781 100644
+index 5a7a50fa1f..c724e3a181 100644
 --- a/packages/coding-agent/test/task/vcs.test.ts
 +++ b/packages/coding-agent/test/task/vcs.test.ts
 @@ -4,8 +4,8 @@
@@ -752,9 +752,9 @@ index 0760f0e404..97afe95781 100644
 -	it.skipIf(!jjAvailable)("rejects a pure jj secondary workspace with colocation guidance", async () => {
 +	it.skipIf(!jjAvailable)("resolves a jj secondary workspace to a jj handle", async () => {
  		// `jj workspace add` secondary workspaces carry `.jj/repo` as a pointer
- 		// file and never get a `.git/` — the realistic pure-jj shape (jj >= 0.34
- 		// colocates `jj git init` by default).
-@@ -83,7 +84,31 @@ describe("resolveVcsHandle", () => {
+ 		// file. The main repo is non-colocated: jj >= 0.34 colocates `jj git init`
+ 		// by default, and jj >= 0.46 then gives secondary workspaces a git
+@@ -84,7 +85,31 @@ describe("resolveVcsHandle", () => {
  		await run(main, ["jj", "workspace", "add", ws]);
  		tempDirs.push(ws);
  
@@ -787,7 +787,7 @@ index 0760f0e404..97afe95781 100644
  	});
  
  	it("rejects a directory outside any repository", async () => {
-@@ -92,3 +117,177 @@ describe("resolveVcsHandle", () => {
+@@ -93,3 +118,177 @@ describe("resolveVcsHandle", () => {
  		await expect(resolveVcsHandle(dir)).rejects.toThrow(/Git repository not found/);
  	});
  });
@@ -966,7 +966,7 @@ index 0760f0e404..97afe95781 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index d4622c99ab..84ec4ef44e 100644
+index 83e0c3dd3e..ed21cc35b2 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -252,6 +252,27 @@ describe("worktree isolation helpers", () => {

@@ -71,10 +71,10 @@ index e6d2764fb4..fa5107cdda 100644
  		const isolationBackend = handle.backend;
  		const vcs = opts.context.vcs;
 diff --git a/packages/coding-agent/src/task/settings.ts b/packages/coding-agent/src/task/settings.ts
-index 988e48c079..0653d1e816 100644
+index a4d6ac4506..b85a37c7fa 100644
 --- a/packages/coding-agent/src/task/settings.ts
 +++ b/packages/coding-agent/src/task/settings.ts
-@@ -73,6 +73,20 @@ export const cfgIsolationBackend = register({
+@@ -74,6 +74,20 @@ export const cfgIsolationBackend = register({
  	},
  });
  
@@ -96,10 +96,10 @@ index 988e48c079..0653d1e816 100644
  	id: "worktree.clone",
  	protocolDefault: ["rpc", "acp"],
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index d1a8c040d5..f55f26b1bb 100644
+index f830cd0427..d069924d44 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -70,6 +70,7 @@ import {
+@@ -72,6 +72,7 @@ import {
  	cfgTaskIsolationApply,
  	cfgTaskIsolationEnabled,
  	cfgTaskIsolationMerge,
@@ -107,19 +107,19 @@ index d1a8c040d5..f55f26b1bb 100644
  	cfgTaskMaxRecursionDepth,
  } from "./settings";
  
-@@ -832,6 +833,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
- 				baseOptions,
- 				context: isolationContext,
- 				preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
-+				requireCow: cfgTaskIsolationRequireCow.get(request.session.settings),
- 				agentId: id,
- 				mergeMode: policy.mergeMode,
- 				artifactsDir: lease.artifactsDir,
+@@ -884,6 +885,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+ 					baseOptions,
+ 					context: isolationContext,
+ 					preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
++					requireCow: cfgTaskIsolationRequireCow.get(request.session.settings),
+ 					agentId: id,
+ 					mergeMode: policy.mergeMode,
+ 					artifactsDir: lease.artifactsDir,
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 33edb6f2ee..0c7f81713f 100644
+index 4dd54d40d1..49de6111c7 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -620,11 +620,16 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
+@@ -649,11 +649,16 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
   * Snapshot `repoRoot` into a CoW isolation mount. `repoRoot` must already be
   * the VCS-resolved workspace root ({@link VcsHandle.root} — git checkout or
   * jj workspace); resolution/gating happens in `resolveVcsHandle`, not here.
@@ -136,7 +136,7 @@ index 33edb6f2ee..0c7f81713f 100644
  ): Promise<IsolationHandle> {
  	const sourceCommonDir = vcs.git(repoRoot)?.info().commonDir ?? path.join(repoRoot, ".git");
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
-@@ -652,7 +657,7 @@ export async function ensureIsolation(
+@@ -681,7 +686,7 @@ export async function ensureIsolation(
  		await fs.mkdir(baseDir, { recursive: true });
  		await writeIsolationOwner(baseDir, id);
  		try {
@@ -182,7 +182,7 @@ index a13f8ed380..a5cd7f584f 100644
  			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
  		});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 7ee2165216..3738635147 100644
+index 7038d5380f..796e0f2caf 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -293,6 +293,36 @@ describe("worktree isolation helpers", () => {

@@ -164,7 +164,7 @@ index d339b6a9c8..1d49d4589b 100644
 +	return kernel ? `${sessionId}:kernel=${kernel}` : sessionId;
 +}
 diff --git a/packages/coding-agent/src/prompts/tools/eval.md b/packages/coding-agent/src/prompts/tools/eval.md
-index 06f3cfc9e2..d61aef8e83 100644
+index b26902b2ec..c6f8a0bca3 100644
 --- a/packages/coding-agent/src/prompts/tools/eval.md
 +++ b/packages/coding-agent/src/prompts/tools/eval.md
 @@ -1,4 +1,5 @@
@@ -174,7 +174,7 @@ index 06f3cfc9e2..d61aef8e83 100644
  {{#if py}}Python: plain Python subprocess, not IPython (no `get_ipython()`, `obj?`, or `%matplotlib`). Magics like `%pip`, `%load`, `%time` and `!cmd` are rewritten to Python. Top-level `await` works; `asyncio.run(…)` fails.{{/if}}
  {{#if js}}JS: Bun (`Bun.file`, `Bun.write`, `Bun.$`); top-level `await`/`return` work.{{/if}}
 diff --git a/packages/coding-agent/src/tools/eval.ts b/packages/coding-agent/src/tools/eval.ts
-index c8c8c6a149..558c484295 100644
+index e0f9519dd8..17c36bdee3 100644
 --- a/packages/coding-agent/src/tools/eval.ts
 +++ b/packages/coding-agent/src/tools/eval.ts
 @@ -18,7 +18,7 @@ import { IdleTimeout } from "../eval/idle-timeout";
@@ -185,7 +185,7 @@ index c8c8c6a149..558c484295 100644
 +import { defaultEvalSessionId, EVAL_KERNEL_NAME, namedKernelSessionId } from "../eval/session-id";
  import { EvalShadowCellSession } from "../eval/speculation/cell-session";
  import { runWithEvalShadowCell } from "../eval/speculation/runtime-context";
- import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "@oh-my-pi/pi-tui/tools/eval";
+ import type {
 @@ -103,6 +103,7 @@ const evalCellCommonFields = {
  	"title?": type("string").describe("Short transcript label."),
  	"timeout?": type("number").describe("Cell deadline in seconds; 0 disables it."),
@@ -194,7 +194,7 @@ index c8c8c6a149..558c484295 100644
  };
  
  /**
-@@ -147,6 +148,44 @@ const DISPLAY_ELISION_RESERVE_BYTES = 64;
+@@ -148,6 +149,44 @@ const MAX_VIEWS_PER_CELL = 16;
  /** Minimum spacing between live eval updates; bursts coalesce to one trailing snapshot. */
  const LIVE_UPDATE_INTERVAL_MS = 50;
  
@@ -236,10 +236,10 @@ index c8c8c6a149..558c484295 100644
 +	return release;
 +}
 +
- interface FormattedDisplayJson {
- 	fullText: string;
- 	previewText: string;
-@@ -291,6 +330,7 @@ interface ResolvedEvalCell {
+ export interface EvalToolDescriptionOptions {
+ 	py?: boolean;
+ 	js?: boolean;
+@@ -244,6 +283,7 @@ interface ResolvedEvalCell {
  	environment?: "managed" | "project";
  	timeoutMs: number;
  	reset: boolean;
@@ -247,7 +247,7 @@ index c8c8c6a149..558c484295 100644
  	resolved: ResolvedBackend;
  }
  
-@@ -425,7 +465,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -378,7 +418,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  		}
  		return this.#cachedParams ?? evalSchema;
  	}
@@ -258,7 +258,7 @@ index c8c8c6a149..558c484295 100644
  	readonly strict = true;
  	readonly intent = (args: Partial<typeof evalSchema.infer>): string | undefined => {
  		const title = typeof args.title === "string" ? args.title : undefined;
-@@ -505,6 +547,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -458,6 +500,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  		const session = this.session;
  		const excludeWebP = webpExclusionForModel(session.getActiveModel?.());
  
@@ -269,7 +269,7 @@ index c8c8c6a149..558c484295 100644
  		const cellLanguage: EvalLanguage = params.language === "py" ? "python" : params.language;
  		// Bound backend discovery by the eval cell's own timeout and abort signal:
  		// the cell IdleTimeout is armed only later in #runCells, so a hung runtime
-@@ -515,8 +561,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -468,8 +514,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  				: clampTimeout("eval", params.timeout, cfgToolsMaxTimeout.get(session.settings)) * 1000;
  		const resolved = await resolveBackend(session, cellLanguage, { signal, timeoutMs: cellTimeoutMs });
  		const source = await prepareEvalSource(params, session, signal);
@@ -282,7 +282,7 @@ index c8c8c6a149..558c484295 100644
  		}
  		const cells: ResolvedEvalCell[] = [
  			{
-@@ -529,6 +577,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -482,6 +530,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  					source.environment ?? (this.#environmentModes[cellLanguage] === "project" ? "project" : undefined),
  				timeoutMs: cellTimeoutMs,
  				reset: params.reset ?? false,
@@ -290,7 +290,7 @@ index c8c8c6a149..558c484295 100644
  				resolved,
  			},
  		];
-@@ -895,6 +944,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -824,6 +873,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  			for (let i = 0; i < cells.length; i++) {
  				const cell = cells[i];
  				const backend = cell.resolved.backend;
@@ -301,9 +301,9 @@ index c8c8c6a149..558c484295 100644
 +					signal ? AbortSignal.any([signal, sessionAbortController.signal]) : sessionAbortController.signal,
 +				);
  				// The per-cell `timeout` is a budget on the cell runtime's *own*
- 				// work. Host-side waits on `agent()`/`completion()` handles suspend
- 				// that budget entirely and restart a fresh timeout window when control
-@@ -938,6 +993,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+ 				// work. Host-side waits on `agent()`/`completion()` handles,
+ 				// `tool.task()`/`tool.wait()`, and browser/computer preludes suspend
+@@ -869,6 +924,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  						session,
  						idleTimeoutMs,
  						reset: cell.reset,
@@ -311,7 +311,7 @@ index c8c8c6a149..558c484295 100644
  						filename: cell.filename,
  						packages: cell.packages,
  						environment: cell.environment,
-@@ -964,6 +1020,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
+@@ -895,6 +951,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
  					});
  				} finally {
  					idle?.dispose();

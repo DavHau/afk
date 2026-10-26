@@ -36,10 +36,10 @@ lines are unchanged upstream; context shift only. Tests re-applied
 verbatim.
 
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 76ea0315fd..33edb6f2ee 100644
+index 0a8c074952..4dd54d40d1 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -630,8 +630,17 @@ export async function ensureIsolation(
+@@ -659,8 +659,17 @@ export async function ensureIsolation(
  	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
  	const resolution = await natives.isoResolve(preferred ?? null);
@@ -60,7 +60,7 @@ index 76ea0315fd..33edb6f2ee 100644
  	for (const candidate of candidates) {
  		await fs.rm(baseDir, { recursive: true, force: true });
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 84ec4ef44e..7ee2165216 100644
+index ed21cc35b2..7038d5380f 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -252,6 +252,47 @@ describe("worktree isolation helpers", () => {

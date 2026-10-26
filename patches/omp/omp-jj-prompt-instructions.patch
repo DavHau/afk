@@ -58,7 +58,7 @@ index 88d1899670..159ef0d22a 100644
  - Canonical plan: MUST write `local://<slug>-plan.md`.
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index fefe668971..182fc95023 100644
+index 721239b099..a6c53a5d17 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
 @@ -200,7 +200,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand

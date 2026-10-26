@@ -38,8 +38,18 @@
 # submodules, which the jj-workspace patch skips for pure jj workspaces with
 # no git checkout; SessionAffinity gained session restrictions ahead of the
 # weekly-reset patch's CredentialBlocks argument; eval cells accept more
-# languages than py/js; pi-iso's reflink tree walk moved behind tree::TreeCopy)
-# in patches/omp/.
+# languages than py/js; pi-iso's reflink tree walk moved behind tree::TreeCopy),
+# then 18.12.6 (task.md reworded the isolation bullets and documents an
+# omitted `isolated` as sharing the parent checkout — required-flag rewrites
+# that text in docs and the task.isolation.enabled setting; planSpawns gained
+# seance validation and the isolation schema variants spread seanceFields;
+# runIsolatedSubprocess nests inside a releaseHold try; classifyDifficulty
+# filters the judge's ladder to supported tiers and skips the judge at ≤1
+# tier, so the auto-thinking ceiling now filters the ladder too; the
+# account ranker grew an opt-in reclaim eviction policy ahead of the
+# weekly-reset one; PythonKernel takes pythonPath before the hostEnv thunk;
+# eval.ts dropped the display() JSON machinery the named-kernel lane was
+# anchored on) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -86,8 +96,10 @@
 #   providers.autoThinkingMaxEffort only chooses xhigh vs max), so the ceiling
 #   also shapes the classifier prompt: `max` is never offered. Explicit
 #   selections are untouched (a pinned level, and the `ultrathink` keyword,
-#   which clamps at its own call site, still reach the model's max). Ships one
-#   regression test and retargets the five upstream max-opt-in tests.
+#   which clamps at its own call site, still reach the model's max). Since
+#   18.12.6 the judge's tier list is filtered to ≤ high as well (an `xhigh`
+#   answer is rejected, and an `["xhigh","max"]` ladder resolves no level).
+#   Ships regression tests and retargets the upstream max/xhigh-answer tests.
 # - omp-isolation-pinned-backend: an explicit task.isolation.mode is a hard
 #   pin — ensureIsolation no longer walks the resolver's fallback chain when
 #   a backend is configured. The distro sets overlayfs; a host where the

@@ -10,9 +10,11 @@ session: rec 4980, then cascading kernel deaths).
 What must survive a rebase:
 - TOOL_TIMEOUTS.eval.default is 300 (min/max unchanged). Explicit
   `timeout` values and `timeout: 0` behave as upstream.
+- test/tools/eval-auto-background.test.ts asserts the default deadline in
+  the auto-background notice; it expects 300s.
 
 diff --git a/packages/coding-agent/src/tools/tool-timeouts.ts b/packages/coding-agent/src/tools/tool-timeouts.ts
-index cb17e3d102..954f2227f8 100644
+index a0262f5205..b550fe84c5 100644
 --- a/packages/coding-agent/src/tools/tool-timeouts.ts
 +++ b/packages/coding-agent/src/tools/tool-timeouts.ts
 @@ -9,7 +9,7 @@ export interface ToolTimeoutConfig {
@@ -24,3 +26,19 @@ index cb17e3d102..954f2227f8 100644
  	browser: { default: 30, min: 1, max: 300 },
  	computer: { default: 120, min: 1, max: 300 },
  	ssh: { default: 60, min: 1, max: 3600 },
+diff --git a/packages/coding-agent/test/tools/eval-auto-background.test.ts b/packages/coding-agent/test/tools/eval-auto-background.test.ts
+index ed4dd1fde2..933ab1ff74 100644
+--- a/packages/coding-agent/test/tools/eval-auto-background.test.ts
++++ b/packages/coding-agent/test/tools/eval-auto-background.test.ts
+@@ -157,9 +157,9 @@ describe("EvalTool auto-background", () => {
+ 		expect(result.details?.async?.type).toBe("eval");
+ 		const text = result.content.map(c => (c.type === "text" ? c.text : "")).join("\n");
+ 		expect(text).toContain("Backgrounded as job");
+-		// No `timeout` given, backgrounded after its foreground wait: the deadline is eval's 30 s
++		// No `timeout` given, backgrounded after its foreground wait: the deadline is eval's 300 s
+ 		// default counted over the cell's whole run, not time left.
+-		expect(text).toContain("(killed once it has run 30s in total; `timeout: 0` disables the deadline)");
++		expect(text).toContain("(killed once it has run 300s in total; `timeout: 0` disables the deadline)");
+ 		// The snapshot keeps the running cell (with its streamed tail) for the transcript.
+ 		expect(result.details?.cells?.[0]?.status).toBe("running");
+ 

@@ -37,7 +37,7 @@ the kernel's hostEnv thunk passes live=true. kernel.ts, runner.py and
 runtime.ts hunks only moved (runner.py +69 lines).
 
 diff --git a/packages/coding-agent/src/eval/py/kernel.ts b/packages/coding-agent/src/eval/py/kernel.ts
-index a0fb33b24e..849ba9ec82 100644
+index ac7ef56a7f..7160cb3c49 100644
 --- a/packages/coding-agent/src/eval/py/kernel.ts
 +++ b/packages/coding-agent/src/eval/py/kernel.ts
 @@ -8,7 +8,7 @@
@@ -57,21 +57,25 @@ index a0fb33b24e..849ba9ec82 100644
  	type PythonRuntime,
  	resolveExplicitPythonRuntime,
  	resolvePythonRuntime,
-@@ -177,7 +178,12 @@ async function probePythonKernelAvailability(
+@@ -173,10 +174,16 @@ async function probePythonKernelAvailability(
  export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
  	#installedPreludes = new Map<string, PythonPreludeSource>();
  
--	private constructor(id: string) {
+-	/** @param pythonPath Interpreter executable this kernel runs on; reported as the runtime in eval state. */
 +	/**
-+	 * `hostEnv` yields the live host environment for every request; the runner
++	 * @param pythonPath Interpreter executable this kernel runs on; reported as the runtime in eval state.
++	 * @param hostEnv Yields the live host environment for every request; the runner
 +	 * applies what changed since the previous request to `os.environ`, so
 +	 * mid-session host env updates (direnv reloads) reach a retained kernel.
 +	 */
-+	private constructor(id: string, hostEnv: () => Record<string, string>) {
+ 	private constructor(
+ 		id: string,
+ 		readonly pythonPath: string,
++		hostEnv: () => Record<string, string>,
+ 	) {
  		super(id, {
  			languageName: "Python",
- 			traceIpc: TRACE_IPC,
-@@ -191,6 +197,7 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
+@@ -191,6 +198,7 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
  					cwd: opts?.cwd,
  					filename: opts?.filename,
  					env: opts?.env,
@@ -79,21 +83,21 @@ index a0fb33b24e..849ba9ec82 100644
  					silent: opts?.silent ?? false,
  					storeHistory: opts?.storeHistory ?? !(opts?.silent ?? false),
  					expectedShadowRevision: opts?.expectedShadowRevision,
-@@ -303,7 +310,11 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
+@@ -303,7 +311,11 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
  		spawnEnv.PYTHONIOENCODING = "utf-8";
  
  		const scriptPath = await stageRunnerScript("omp-python-runner", "py", RUNNER_SCRIPT);
--		const kernel = new PythonKernel(Snowflake.next());
+-		const kernel = new PythonKernel(Snowflake.next(), runtime.pythonPath);
 +		const hostRuntime = runtime;
 +		const shell = (await Settings.init()).getShellConfig().shell;
-+		const kernel = new PythonKernel(Snowflake.next(), () =>
++		const kernel = new PythonKernel(Snowflake.next(), runtime.pythonPath, () =>
 +			hostKernelEnv(hostRuntime, procmgr.buildSpawnEnv(shell, true)),
 +		);
  
  		const proc = Bun.spawn([runtime.pythonPath, "-u", scriptPath], {
  			cwd: options.cwd,
 diff --git a/packages/coding-agent/src/eval/py/runner.py b/packages/coding-agent/src/eval/py/runner.py
-index 765bab1fb4..7ff48320d5 100644
+index c275bf7a61..6c968924ec 100644
 --- a/packages/coding-agent/src/eval/py/runner.py
 +++ b/packages/coding-agent/src/eval/py/runner.py
 @@ -5,7 +5,7 @@ wrapper writes typed frames back.
@@ -105,7 +109,7 @@ index 765bab1fb4..7ff48320d5 100644
    {"type": "tool", "id": str, "op": "describe", "names": [str]}
    {"type": "tool", "id": str, "op": "call", "name": str, "args": dict}
    {"type": "exit"}                                # graceful shutdown
-@@ -2080,6 +2080,33 @@ _MANAGED_ENV_KEYS = (
+@@ -2556,6 +2556,33 @@ _MANAGED_ENV_KEYS = (
      "PI_EVAL_LOCAL_ROOTS",
  )
  
@@ -139,7 +143,7 @@ index 765bab1fb4..7ff48320d5 100644
  
  def _apply_request_runtime(req: dict) -> None:
      cwd = req.get("cwd")
-@@ -2091,6 +2118,10 @@ def _apply_request_runtime(req: dict) -> None:
+@@ -2567,6 +2594,10 @@ def _apply_request_runtime(req: dict) -> None:
              pass
          sys.path.insert(0, cwd)
  

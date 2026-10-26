@@ -47,19 +47,19 @@ cleanupTaskBranches and rescueTaskBranch hunks are unchanged in intent.
 refs/heads/omp/task/*.
 
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index a78f08a676..12f5b6d038 100644
+index 02a1fd2438..955d93facb 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -130,7 +130,7 @@ Artifacts and side channels:
+@@ -136,7 +136,7 @@ Artifacts and side channels:
    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Speculative launch (`task.speculativeLaunch`, default on; batch mode only) — while a `{ context, tasks[] }` call streams, the tool's stream session (`src/task/speculative-launch.ts`) starts each item's `SpawnRun` as soon as that item's JSON object closes (`context` must already have closed), and starts the remainder when the call finishes streaming. Dispatch adopts runs whose normalized spawn params still match; an invalid finished call, launched items that differ from the finished call, a blocking hook, or an aborted turn aborts every launched run. Launches need host authorization (`authorizeLaunch`): auto-allowed `task` approval and no extension `tool_call`/`tool_result`/approval lifecycle handlers.
- - Isolation is enabled with `task.isolation.enabled`; `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
+ - Isolation is available when `task.isolation.enabled` is true: each task must set `isolated: true` to use a separate checkout; omitted or `false` tasks share the parent checkout. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
 -- Isolation merge strategy: `task.isolation.merge` selects patch mode (capture/apply root patches) or branch mode (commit to `omp/task/<id>`, cherry-pick into parent). `task.isolation.apply=false` retains captured changes without applying them; nested repositories get separate patch artifacts.
 +- Isolation merge strategy: `task.isolation.merge` selects patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command). `task.isolation.apply=false` retains captured changes without applying them; nested repositories get separate patch artifacts.
  - Eval-defined tools: `tools` resolves names across the parent's retained Python/JS kernels. Unknown names, disabled sharing, or the same name defined in both kernels fail preflight; these tools are not available in plan mode.
  - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `reviewer`, `security-reviewer`, `task`, `sonic`).
  - Prewalk: agent frontmatter `prewalk` or `task.agentPrewalk[agentName]` can start on the normal model and hand off to a cheaper resolved model at the first edit/write. `task.prewalk` (default off) arms this behavior for the bundled generic `task` agent. Missing/unconfigured targets and exact model+effort no-ops skip the handoff rather than failing the spawn.
-@@ -139,7 +139,7 @@ Artifacts and side channels:
+@@ -145,7 +145,7 @@ Artifacts and side channels:
  ## Side Effects
  - Filesystem
    - Writes `<id>.jsonl` and `<id>.md` under the session artifacts dir or a temp task dir; isolated patch mode writes `<id>.patch`.
@@ -120,10 +120,10 @@ index 7be0aace6d..ca5ef1d532 100644
  }
  
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 999ab79d15..811ac07cd7 100644
+index 5a6db971ee..816f3a09f5 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -704,6 +704,55 @@ export interface CommitToBranchResult {
+@@ -733,6 +733,55 @@ export interface CommitToBranchResult {
  	baseSha?: string;
  }
  
@@ -179,7 +179,7 @@ index 999ab79d15..811ac07cd7 100644
  function baselineHasRootWip(baseline: RepoBaseline): boolean {
  	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
  }
-@@ -886,7 +935,8 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
+@@ -915,7 +964,8 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
  
  /**
   * Capture task-only changes from the isolation worktree onto a parent-repo
@@ -189,7 +189,7 @@ index 999ab79d15..811ac07cd7 100644
   * nested-repo patches are returned separately because the parent git can't
   * track files inside gitlinks.
   *
-@@ -943,9 +993,9 @@ export async function commitToBranch(
+@@ -972,9 +1022,9 @@ export async function commitToBranch(
  	} else if (agentCommitted) {
  		// Transfer the agent's commit objects (which live in isolation's `.git`,
  		// stranded once `cleanupIsolation` tears the workspace down) into the
@@ -202,7 +202,7 @@ index 999ab79d15..811ac07cd7 100644
  		tip = isolationHead;
  		// Leftover = anything still uncommitted in isolation on top of the
  		// agent's last commit (staged, unstaged, untracked). The agent didn't
-@@ -969,7 +1019,7 @@ export async function commitToBranch(
+@@ -998,7 +1048,7 @@ export async function commitToBranch(
  	}
  
  	if (tip === baselineSha) return { rootPatch, baseSha: baselineSha, nestedPatches };
@@ -211,7 +211,7 @@ index 999ab79d15..811ac07cd7 100644
  	return { branchName, baseSha: baselineSha, rootPatch, nestedPatches };
  }
  
-@@ -1003,7 +1053,10 @@ export async function mergeTaskBranches(
+@@ -1032,7 +1082,10 @@ export async function mergeTaskBranches(
  		const merged: string[] = [];
  		for (const { branchName, baseSha } of branches) {
  			try {
@@ -223,7 +223,7 @@ index 999ab79d15..811ac07cd7 100644
  				for (const revision of revisions) {
  					try {
  						await repo.cherryPick(revision);
-@@ -1033,6 +1086,9 @@ export async function mergeTaskBranches(
+@@ -1062,6 +1115,9 @@ export async function mergeTaskBranches(
  export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
  	const repo = vcs.requireGit(repoRoot);
  	for (const branch of branches) {
@@ -429,10 +429,10 @@ index 0000000000..c3d6460141
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 0d80b073c1..d4622c99ab 100644
+index 0da574ce19..83e0c3dd3e 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -1516,4 +1516,82 @@ describe("commitToBranch preserves agent commits", () => {
+@@ -1542,4 +1542,82 @@ describe("commitToBranch preserves agent commits", () => {
  			expect(branchDiff).toContain("+agent-edit");
  		});
  	});

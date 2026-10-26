@@ -33,7 +33,7 @@ What must survive a rebase:
 - Warm-pin re-rank: for strategies with preferEarlierSecondaryReset,
   CredentialSelector.resolveOAuth ranks even while the session's automatic
   pin is warm and available (upstream skips ranking inside stickyWarmMs,
-  so a busy session never re-ranks). A third automatic-pin eviction policy
+  so a busy session never re-ranks). An extra automatic-pin eviction policy
   ("soonest reset") evicts the pin only when the best-ranked usable
   sibling ahead of it resets more than SECONDARY_RESET_TIE_TOLERANCE_MS
   earlier (both resets known) — drain/usage differences alone never cost
@@ -64,6 +64,12 @@ OAuth preflight). Block clearing moved into SessionAffinity.pin via an
 injected CredentialBlocks. Tests moved to the namespaced API; the
 weekly-reset test now uses a temp SqliteAuthCredentialStore instead of a
 hand-rolled store (the store interface grew substantially).
+
+Rebased 18.11.1 -> 18.12.6: upstream added the opt-in reclaim policy
+(accountPriority / reclaimReady on UsageCandidate) as a third eviction
+policy in automaticPinWouldBeEvicted; the soonest-reset check now sits
+after the reclaim check as the fourth policy, and secondaryResetAt is
+carried alongside the new fields in orderUsageRankedCandidates.
 
 diff --git a/packages/ai/src/auth-storage.ts b/packages/ai/src/auth-storage.ts
 index cd5c16dc90..202b593cf0 100644
@@ -186,13 +192,13 @@ index b0235ce5f5..1078f96305 100644
  		const identity: OAuthAccountIdentity = {};
  		if (typeof preferred.accountId === "string" && preferred.accountId.length > 0) {
 diff --git a/packages/ai/src/auth/rank.ts b/packages/ai/src/auth/rank.ts
-index d4d0372ef8..39c7a64ee1 100644
+index 59dffc067a..08b807e9bd 100644
 --- a/packages/ai/src/auth/rank.ts
 +++ b/packages/ai/src/auth/rank.ts
-@@ -25,6 +25,12 @@ export type UsageCandidate<T extends AuthCredential> = {
- 	 * spent, so if it still serves it draws on paid overage such as Codex credits.
- 	 */
- 	allowanceSpent?: boolean;
+@@ -29,6 +29,12 @@ export type UsageCandidate<T extends AuthCredential> = {
+ 	accountPriority?: number;
+ 	/** Present after policy-aware ranking: unblocked and measured at or above its `reclaimAbovePct`. */
+ 	reclaimReady?: boolean;
 +	/**
 +	 * Present after ranking: secondary-window reset (epoch ms), +Infinity when
 +	 * unknown. Used to decide whether a warm automatic pin yields to a sibling
@@ -202,7 +208,7 @@ index d4d0372ef8..39c7a64ee1 100644
  };
  
  /** OAuth credential eligible for usage ranking. */
-@@ -48,6 +54,8 @@ export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> &
+@@ -52,6 +58,8 @@ export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> &
  	usageMeasured: boolean;
  	planPriority: number;
  	secondaryUsed: number;
@@ -211,7 +217,7 @@ index d4d0372ef8..39c7a64ee1 100644
  	secondaryRequiredDrain: number;
  	primaryUsed: number;
  	primaryRequiredDrain: number;
-@@ -59,6 +67,12 @@ export type RankedOAuthCandidate = UsageRankedCandidate<OAuthCredential>;
+@@ -63,6 +71,12 @@ export type RankedOAuthCandidate = UsageRankedCandidate<OAuthCredential>;
  export type RankedApiKeyCandidate = UsageRankedCandidate<ApiKeyCredential>;
  
  const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -224,7 +230,7 @@ index d4d0372ef8..39c7a64ee1 100644
  /**
   * Primary (short, e.g. 5h) window used-fraction at or above which a candidate
   * is demoted behind cooler siblings during ranking: a nearly exhausted short
-@@ -85,6 +99,7 @@ function compareUsageRankedCandidatePriority(
+@@ -89,6 +103,7 @@ function compareUsageRankedCandidatePriority(
  	left: UsageRankedCandidate<AuthCredential>,
  	right: UsageRankedCandidate<AuthCredential>,
  	planGated: boolean,
@@ -232,7 +238,7 @@ index d4d0372ef8..39c7a64ee1 100644
  ): number {
  	if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
  	if (left.blocked && right.blocked) {
-@@ -101,6 +116,13 @@ function compareUsageRankedCandidatePriority(
+@@ -105,6 +120,13 @@ function compareUsageRankedCandidatePriority(
  	if (left.allowanceSpent !== right.allowanceSpent) return left.allowanceSpent ? 1 : -1;
  	if (left.inReserve !== right.inReserve) return left.inReserve ? 1 : -1;
  	if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
@@ -246,7 +252,7 @@ index d4d0372ef8..39c7a64ee1 100644
  	// Short-window guard: candidates whose primary (e.g. 5h) window is
  	// nearly exhausted rank behind cool ones regardless of drain urgency —
  	// overflow lands on the next-most-urgent cool account instead.
-@@ -134,17 +156,22 @@ function compareUsageRankedCandidates(
+@@ -138,17 +160,22 @@ function compareUsageRankedCandidates(
  	left: UsageRankedCandidate<AuthCredential>,
  	right: UsageRankedCandidate<AuthCredential>,
  	planGated: boolean,
@@ -272,15 +278,15 @@ index d4d0372ef8..39c7a64ee1 100644
  	return candidates.map(candidate => ({
  		selection: candidate.selection,
  		usage: candidate.usage,
-@@ -152,5 +179,6 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
- 		inReserve: candidate.inReserve,
- 		reserveMeasured: candidate.reserveMeasured,
+@@ -158,5 +185,6 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
  		allowanceSpent: candidate.allowanceSpent,
+ 		accountPriority: candidate.accountPriority,
+ 		reclaimReady: candidate.reclaimReady,
 +		secondaryResetAt: candidate.secondaryResetAt,
  	}));
  }
 diff --git a/packages/ai/src/auth/select.ts b/packages/ai/src/auth/select.ts
-index 0c5fe68709..8423b7c851 100644
+index 4d0ccd55eb..8acdf33899 100644
 --- a/packages/ai/src/auth/select.ts
 +++ b/packages/ai/src/auth/select.ts
 @@ -19,6 +19,7 @@ import { authCredentialEquals, type CredentialPool } from "./pool";
@@ -299,7 +305,7 @@ index 0c5fe68709..8423b7c851 100644
  } from "./usage-report";
  
  /** Temporary block after a transient OAuth refresh failure. */
-@@ -282,13 +284,14 @@ export class CredentialSelector {
+@@ -288,13 +290,14 @@ export class CredentialSelector {
  				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
  				planPriority: 0,
  				secondaryUsed: normalizeUsageFraction(secondary),
@@ -315,7 +321,7 @@ index 0c5fe68709..8423b7c851 100644
  	}
  
  	async selectApiKey(
-@@ -487,6 +490,7 @@ export class CredentialSelector {
+@@ -498,6 +501,7 @@ export class CredentialSelector {
  				hasPriorityBoost: strategy?.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
  				planPriority: planPriority(args.planGate, usage),
  				secondaryUsed: strategy ? normalizeUsageFraction(secondary) : 0,
@@ -323,7 +329,7 @@ index 0c5fe68709..8423b7c851 100644
  				secondaryRequiredDrain:
  					strategy === undefined ? 0 : windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
  				primaryUsed: strategy ? normalizeUsageFraction(primary) : 0,
-@@ -495,7 +499,11 @@ export class CredentialSelector {
+@@ -506,7 +510,11 @@ export class CredentialSelector {
  				orderPos,
  			});
  		}
@@ -336,7 +342,7 @@ index 0c5fe68709..8423b7c851 100644
  	}
  
  	/**
-@@ -594,11 +602,17 @@ export class CredentialSelector {
+@@ -605,11 +613,17 @@ export class CredentialSelector {
  			sessionPreferredCanRefreshOrUse &&
  			!this.#deps.blocks.isBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
  		const sessionPinIsExplicit = sessionCredential?.type === "oauth" && sessionCredential.explicit === true;
@@ -355,31 +361,35 @@ index 0c5fe68709..8423b7c851 100644
  		// A warm automatic pin whose allowance is spent keeps serving on paid overage
  		// (Codex credits) and is never blocked, so check it and rank when spent: a
  		// sibling with renewable allowance left must take over (#13889). tryOAuth
-@@ -683,13 +697,34 @@ export class CredentialSelector {
+@@ -694,11 +708,21 @@ export class CredentialSelector {
  				candidate.selection.index === sessionPreferredIndex,
  		);
  		const preferredCandidate = sessionPreferredCandidate === -1 ? undefined : candidates[sessionPreferredCandidate];
--		// A warm automatic pin normally wins. Two policies may evict it, each only
+-		// A warm automatic pin normally wins. Three policies may evict it, each only
 +		// Siblings the soonest-reset ranking placed ahead of the pin, best first. Captured before the
 +		// pin is promoted below so the post-preflight check still sees the ranked leader.
 +		const rankedAheadOfPin =
 +			preferEarlierSecondaryReset && shouldRank && sessionPreferredCandidate > 0
 +				? candidates.slice(0, sessionPreferredCandidate)
 +				: [];
-+		// A warm automatic pin normally wins. Three policies may evict it, each only
++		// A warm automatic pin normally wins. Four policies may evict it, each only
  		// while a sibling is confirmed better: reserve (sibling measured outside
--		// reserve) and spent allowance (unblocked sibling with allowance left).
--		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean =>
--			!sessionPinIsExplicit &&
--			preferredCandidate !== undefined &&
--			candidates.some(candidate => {
-+		// reserve), spent allowance (unblocked sibling with allowance left), and
-+		// soonest reset (the best-ranked usable sibling's secondary window resets
-+		// more than SECONDARY_RESET_TIE_TOLERANCE_MS earlier; both resets must be
-+		// known — a failed usage fetch is no evidence the reset order changed, and
+-		// reserve), spent allowance (unblocked sibling with allowance left), and
++		// reserve), spent allowance (unblocked sibling with allowance left),
+ 		// opt-in reclaim (the sibling ranking picks next has higher priority and is
+-		// measured at or above its `reclaimAbovePct`).
++		// measured at or above its `reclaimAbovePct`), and soonest reset (the
++		// best-ranked usable sibling's secondary window resets more than
++		// SECONDARY_RESET_TIE_TOLERANCE_MS earlier; both resets must be known — a
++		// failed usage fetch is no evidence the reset order changed, and
 +		// drain/usage differences alone never cost the warm prompt cache).
-+		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean => {
-+			if (sessionPinIsExplicit || preferredCandidate === undefined) return false;
+ 		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean => {
+ 			if (sessionPinIsExplicit || preferredCandidate === undefined) return false;
+ 			const rankedWinner = candidates.find(
+@@ -713,6 +737,18 @@ export class CredentialSelector {
+ 			) {
+ 				return true;
+ 			}
 +			const resetLeader = rankedAheadOfPin.find(
 +				candidate => !excludePreflightFailures || !preflightFailures.has(candidate),
 +			);
@@ -392,23 +402,14 @@ index 0c5fe68709..8423b7c851 100644
 +			) {
 +				return true;
 +			}
-+			return candidates.some(candidate => {
+ 			return candidates.some(candidate => {
  				if (candidate === preferredCandidate) return false;
  				if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
- 				if (
-@@ -706,6 +741,7 @@ export class CredentialSelector {
- 					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)
- 				);
- 			});
-+		};
- 		const pinEvictedBeforePreflight = automaticPinWouldBeEvicted(false);
- 		if (
- 			!hasPlanRequirement &&
 diff --git a/packages/ai/src/auth/types.ts b/packages/ai/src/auth/types.ts
-index 3a137f00d2..97d2e29ab1 100644
+index 2f2d1ed6cf..8b3c8c0ca4 100644
 --- a/packages/ai/src/auth/types.ts
 +++ b/packages/ai/src/auth/types.ts
-@@ -1104,8 +1104,15 @@ export interface OAuthApi {
+@@ -1117,8 +1117,15 @@ export interface OAuthApi {
  	 * Get the OAuth account identity for a provider, preferring the credential that
  	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
  	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
@@ -425,7 +426,7 @@ index 3a137f00d2..97d2e29ab1 100644
  	/**
  	 * Return the configured account policy matching an OAuth identity.
  	 *
-@@ -1145,12 +1152,15 @@ export interface SessionsApi {
+@@ -1158,12 +1165,15 @@ export interface SessionsApi {
  	 * The durable credential id keeps the pin stable across credential refreshes,
  	 * storage reordering, and process restarts. By default this is an explicit
  	 * user pin: ranking and account reserve never evict it; hard unavailability
@@ -460,10 +461,10 @@ index 4fc15f12f0..2b1c73c6d4 100644
  	 * Scopes that apply to a request, most specific first. With a context, the
  	 * request's own scope plus any legacy catch-all scope whose blocks still
 diff --git a/packages/ai/src/usage/claude.ts b/packages/ai/src/usage/claude.ts
-index 4b2038e4aa..a49bc5f487 100644
+index c983e2e2c9..35033cbfe5 100644
 --- a/packages/ai/src/usage/claude.ts
 +++ b/packages/ai/src/usage/claude.ts
-@@ -981,5 +981,11 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
+@@ -974,5 +974,11 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
  			})),
  		];
  	},
