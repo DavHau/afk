@@ -17,8 +17,9 @@ What must survive a rebase:
   HOST_DEFAULTED_SETTING_PATHS (omitting it lets RPC/ACP startup clobber
   explicit caller/project config; upstream CHANGELOG documents that bug
   class for the sibling keys).
-- Plumb: structured-subagent reads the setting into
-  runIsolatedSubprocess opts; IsolatedRunOptions.requireCow;
+- Plumb: structured-subagent reads the setting into the native
+  workspace opener (nativeWorkspace(backend, requireCow) since 18.18.0;
+  IsolatedRunOptions.requireCow before);
   ensureIsolation(repoRoot, id, preferred?, requireCow = false) passes
   `requireCow ? { requireCow: true } : null` as isoStart's 4th argument.
   worktree.ts itself never reads settings — callers resolve and pass
@@ -48,33 +49,41 @@ acp-lazy-startup.test.ts's explicit-config regression fixture now
 includes the key. The new upstream isolation-release.test.ts passes
 requireCow: false.
 
+Rebased 18.12.6 -> 18.18.0: upstream moved workspace materialisation out
+of runIsolatedSubprocess into IsolatedRunOptions.openWorkspace
+(nativeWorkspace(backend) or ovnfsWorkspace). requireCow is now
+nativeWorkspace's second parameter, passed by structured-subagent's
+openIsolatedWorkspace; IsolatedRunOptions no longer carries it and
+isolation-release.test.ts and vcs-jj-e2e.test.ts need no requireCow field. ovnfs checkouts
+(isolation.backend auto) are not reflink clones, so requireCow does not
+apply to them.
+
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index e6d2764fb4..fa5107cdda 100644
+index 07b1f077ed..b69156c92f 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -151,6 +151,8 @@ export interface IsolatedRunOptions {
- 	context: IsolationContext;
- 	/** PAL backend hint from `parseIsolationBackend(...)` (undefined ⇒ resolver picks). */
- 	preferredBackend: IsoBackendKind | undefined;
-+	/** Refuse the reflink backend's byte-copy degradation (`task.isolation.requireCow`). */
-+	requireCow: boolean;
- 	/** Stable id used as the isolation worktree namespace and as the branch suffix. */
- 	agentId: string;
- 	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs). */
-@@ -418,7 +420,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 		return releasePromise;
- 	};
- 	try {
--		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
-+		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend, opts.requireCow);
- 		const isolationDir = handle.mergedDir;
- 		const isolationBackend = handle.backend;
- 		const vcs = opts.context.vcs;
+@@ -319,10 +319,13 @@ export interface IsolationWorkspace {
+ /** Opens the workspace of one isolated run in `repoRoot` for agent `agentId`. */
+ export type OpenWorkspace = (repoRoot: string, agentId: string) => Promise<IsolationWorkspace>;
+ 
+-/** Workspaces materialised by the natives PAL, `backend` a hint (`undefined` ⇒ the resolver picks). */
+-export function nativeWorkspace(backend: IsoBackendKind | undefined): OpenWorkspace {
++/**
++ * Workspaces materialised by the natives PAL, `backend` a hint (`undefined` ⇒ the resolver picks).
++ * `requireCow` refuses the reflink backend's byte-copy degradation (`task.isolation.requireCow`).
++ */
++export function nativeWorkspace(backend: IsoBackendKind | undefined, requireCow = false): OpenWorkspace {
+ 	return async (repoRoot, agentId) => {
+-		const handle = await ensureIsolation(repoRoot, agentId, backend);
++		const handle = await ensureIsolation(repoRoot, agentId, backend, requireCow);
+ 		return {
+ 			dir: handle.mergedDir,
+ 			retain: () => retainIsolationWorkspace(handle.mergedDir, handle.backend),
 diff --git a/packages/coding-agent/src/task/settings.ts b/packages/coding-agent/src/task/settings.ts
-index a4d6ac4506..b85a37c7fa 100644
+index 8f3e08bbf3..f10e4b67a7 100644
 --- a/packages/coding-agent/src/task/settings.ts
 +++ b/packages/coding-agent/src/task/settings.ts
-@@ -74,6 +74,20 @@ export const cfgIsolationBackend = register({
+@@ -80,6 +80,20 @@ export const cfgIsolationBackend = register({
  	},
  });
  
@@ -96,30 +105,33 @@ index a4d6ac4506..b85a37c7fa 100644
  	id: "worktree.clone",
  	protocolDefault: ["rpc", "acp"],
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index f830cd0427..d069924d44 100644
+index 19b7f4c379..3d8b8e744b 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -72,6 +72,7 @@ import {
+@@ -83,6 +83,7 @@ import {
  	cfgTaskIsolationApply,
  	cfgTaskIsolationEnabled,
  	cfgTaskIsolationMerge,
 +	cfgTaskIsolationRequireCow,
  	cfgTaskMaxRecursionDepth,
- } from "./settings";
+ 	cfgTaskPerCallModel,
+ 	ovnfsCommand,
+@@ -892,7 +893,9 @@ function openIsolatedWorkspace(settings: Settings, vcsKind: "git" | "jj"): OpenW
+ 	// afk: ovnfs checkouts serve git checkouts only; a pure jj workspace keeps the
+ 	// native snapshot, whose `.jj` pointer is removed so nothing writes through.
+ 	const ovnfs = backend === "auto" && vcsKind === "git" ? ovnfsCommand(settings) : undefined;
+-	return ovnfs ? ovnfsWorkspace(ovnfs) : nativeWorkspace(parseIsolationBackend(backend));
++	return ovnfs
++		? ovnfsWorkspace(ovnfs)
++		: nativeWorkspace(parseIsolationBackend(backend), cfgTaskIsolationRequireCow.get(settings));
+ }
  
-@@ -884,6 +885,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
- 					baseOptions,
- 					context: isolationContext,
- 					preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
-+					requireCow: cfgTaskIsolationRequireCow.get(request.session.settings),
- 					agentId: id,
- 					mergeMode: policy.mergeMode,
- 					artifactsDir: lease.artifactsDir,
+ function buildFailureResult(
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 4dd54d40d1..49de6111c7 100644
+index c681ca0188..2c61d1e316 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -649,11 +649,16 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
+@@ -654,11 +654,16 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
   * Snapshot `repoRoot` into a CoW isolation mount. `repoRoot` must already be
   * the VCS-resolved workspace root ({@link VcsHandle.root} — git checkout or
   * jj workspace); resolution/gating happens in `resolveVcsHandle`, not here.
@@ -135,8 +147,8 @@ index 4dd54d40d1..49de6111c7 100644
 +	requireCow = false,
  ): Promise<IsolationHandle> {
  	const sourceCommonDir = vcs.git(repoRoot)?.info().commonDir ?? path.join(repoRoot, ".git");
- 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
-@@ -681,7 +686,7 @@ export async function ensureIsolation(
+ 	const baseDir = taskIsolationBaseDir(repoRoot, id);
+@@ -686,7 +691,7 @@ export async function ensureIsolation(
  		await fs.mkdir(baseDir, { recursive: true });
  		await writeIsolationOwner(baseDir, id);
  		try {
@@ -146,10 +158,10 @@ index 4dd54d40d1..49de6111c7 100644
  			// backends duplicate `repoRoot`'s `.git` verbatim — a linked-worktree
  			// pointer file (or the rcopy `git worktree add` registration) leaves
 diff --git a/packages/coding-agent/test/acp-lazy-startup.test.ts b/packages/coding-agent/test/acp-lazy-startup.test.ts
-index a368270a0a..a2500fcf1a 100644
+index f2d4ac4b45..0a76fd971c 100644
 --- a/packages/coding-agent/test/acp-lazy-startup.test.ts
 +++ b/packages/coding-agent/test/acp-lazy-startup.test.ts
-@@ -252,6 +252,7 @@ describe("ACP lazy startup", () => {
+@@ -262,6 +262,7 @@ describe("ACP lazy startup", () => {
  		const explicit = {
  			"task.isolation.enabled": true,
  			"isolation.backend": "rcopy",
@@ -157,35 +169,11 @@ index a368270a0a..a2500fcf1a 100644
  			"task.isolation.apply": false,
  			"task.isolation.merge": "branch",
  			"task.isolation.commits": "ai",
-diff --git a/packages/coding-agent/test/task/isolation-release.test.ts b/packages/coding-agent/test/task/isolation-release.test.ts
-index 7b7c43f01c..be135ffd86 100644
---- a/packages/coding-agent/test/task/isolation-release.test.ts
-+++ b/packages/coding-agent/test/task/isolation-release.test.ts
-@@ -101,6 +101,7 @@ async function commitsAcrossRelease(id: string, runEndPatch: string, releasePatc
- 		},
- 		context: { vcs: new GitCheckoutHandle("/repo"), repoRoot: "/repo" },
- 		preferredBackend: undefined,
-+		requireCow: false,
- 		agentId: id,
- 		mergeMode: "branch",
- 		artifactsDir,
-diff --git a/packages/coding-agent/test/task/vcs-jj-e2e.test.ts b/packages/coding-agent/test/task/vcs-jj-e2e.test.ts
-index a13f8ed380..a5cd7f584f 100644
---- a/packages/coding-agent/test/task/vcs-jj-e2e.test.ts
-+++ b/packages/coding-agent/test/task/vcs-jj-e2e.test.ts
-@@ -106,6 +106,7 @@ describe.skipIf(!jjAvailable)("isolated run in a jj workspace (end to end)", ()
- 			preferredBackend: undefined,
- 			agentId: "JjE2E",
- 			mergeMode: "branch",
-+			requireCow: false,
- 			artifactsDir,
- 			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
- 		});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 7038d5380f..796e0f2caf 100644
+index 31019643a4..855baa1414 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -293,6 +293,36 @@ describe("worktree isolation helpers", () => {
+@@ -314,6 +314,36 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fellBack).toBe(false);
  		});
  
@@ -222,7 +210,7 @@ index 7038d5380f..796e0f2caf 100644
  		it("snapshots a pure jj workspace without VCS gating", async () => {
  			// Regression: ensureIsolation used to re-resolve the root via
  			// getRepoRoot, re-imposing the git gate that resolveVcsHandle had
-@@ -311,7 +341,7 @@ describe("worktree isolation helpers", () => {
+@@ -332,7 +362,7 @@ describe("worktree isolation helpers", () => {
  
  			const handle = await ensureIsolation(jjWs, "pure-jj-no-gate");
  

@@ -72,10 +72,10 @@ after the reclaim check as the fourth policy, and secondaryResetAt is
 carried alongside the new fields in orderUsageRankedCandidates.
 
 diff --git a/packages/ai/src/auth-storage.ts b/packages/ai/src/auth-storage.ts
-index cd5c16dc90..202b593cf0 100644
+index d2a2ba64f7..9cb5e115b8 100644
 --- a/packages/ai/src/auth-storage.ts
 +++ b/packages/ai/src/auth-storage.ts
-@@ -199,7 +199,7 @@ export class AuthStorage {
+@@ -332,7 +332,7 @@ class LocalAuthStorageBackend implements AuthStorageBackend {
  		// override's `cacheVersion` separates its rows from other processes sharing the store.
  		const usageCache = new UsageCache(store, pool, provider => usage.providerFor(provider));
  		const blocks = new CredentialBlocks({ store, pool, health: blockHealth, usageCache, strategies });
@@ -170,10 +170,10 @@ index 68ebf09e3c..0585fc69b5 100644
  	}
  
 diff --git a/packages/ai/src/auth/oauth.ts b/packages/ai/src/auth/oauth.ts
-index b0235ce5f5..1078f96305 100644
+index c1550d5bfb..7e394dffe9 100644
 --- a/packages/ai/src/auth/oauth.ts
 +++ b/packages/ai/src/auth/oauth.ts
-@@ -328,9 +328,15 @@ export class OAuthAccounts implements OAuthApi {
+@@ -330,9 +330,15 @@ export class OAuthAccounts implements OAuthApi {
  	 * Get the OAuth account identity for a provider, preferring the credential that
  	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
  	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
@@ -192,7 +192,7 @@ index b0235ce5f5..1078f96305 100644
  		const identity: OAuthAccountIdentity = {};
  		if (typeof preferred.accountId === "string" && preferred.accountId.length > 0) {
 diff --git a/packages/ai/src/auth/rank.ts b/packages/ai/src/auth/rank.ts
-index 59dffc067a..08b807e9bd 100644
+index 89b80c11aa..0da475e48b 100644
 --- a/packages/ai/src/auth/rank.ts
 +++ b/packages/ai/src/auth/rank.ts
 @@ -29,6 +29,12 @@ export type UsageCandidate<T extends AuthCredential> = {
@@ -252,7 +252,7 @@ index 59dffc067a..08b807e9bd 100644
  	// Short-window guard: candidates whose primary (e.g. 5h) window is
  	// nearly exhausted rank behind cool ones regardless of drain urgency —
  	// overflow lands on the next-most-urgent cool account instead.
-@@ -138,17 +160,22 @@ function compareUsageRankedCandidates(
+@@ -140,17 +162,22 @@ function compareUsageRankedCandidates(
  	left: UsageRankedCandidate<AuthCredential>,
  	right: UsageRankedCandidate<AuthCredential>,
  	planGated: boolean,
@@ -278,7 +278,7 @@ index 59dffc067a..08b807e9bd 100644
  	return candidates.map(candidate => ({
  		selection: candidate.selection,
  		usage: candidate.usage,
-@@ -158,5 +185,6 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
+@@ -160,5 +187,6 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
  		allowanceSpent: candidate.allowanceSpent,
  		accountPriority: candidate.accountPriority,
  		reclaimReady: candidate.reclaimReady,
@@ -286,10 +286,10 @@ index 59dffc067a..08b807e9bd 100644
  	}));
  }
 diff --git a/packages/ai/src/auth/select.ts b/packages/ai/src/auth/select.ts
-index 4d0ccd55eb..8acdf33899 100644
+index 5fd5710827..31417f0a85 100644
 --- a/packages/ai/src/auth/select.ts
 +++ b/packages/ai/src/auth/select.ts
-@@ -19,6 +19,7 @@ import { authCredentialEquals, type CredentialPool } from "./pool";
+@@ -20,6 +20,7 @@ import { authCredentialEquals, type CredentialPool } from "./pool";
  import {
  	orderUsageRankedCandidates,
  	planPriority,
@@ -297,7 +297,7 @@ index 4d0ccd55eb..8acdf33899 100644
  	type ApiKeyCandidate,
  	type ApiKeySelection,
  	type OAuthCandidate,
-@@ -45,6 +46,7 @@ import {
+@@ -46,6 +47,7 @@ import {
  	scopedUsageLimits,
  	usageResetAtMs,
  	windowRequiredDrain,
@@ -305,7 +305,7 @@ index 4d0ccd55eb..8acdf33899 100644
  } from "./usage-report";
  
  /** Temporary block after a transient OAuth refresh failure. */
-@@ -288,13 +290,14 @@ export class CredentialSelector {
+@@ -289,13 +291,14 @@ export class CredentialSelector {
  				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
  				planPriority: 0,
  				secondaryUsed: normalizeUsageFraction(secondary),
@@ -321,7 +321,7 @@ index 4d0ccd55eb..8acdf33899 100644
  	}
  
  	async selectApiKey(
-@@ -498,6 +501,7 @@ export class CredentialSelector {
+@@ -545,6 +548,7 @@ export class CredentialSelector {
  				hasPriorityBoost: strategy?.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
  				planPriority: planPriority(args.planGate, usage),
  				secondaryUsed: strategy ? normalizeUsageFraction(secondary) : 0,
@@ -329,7 +329,7 @@ index 4d0ccd55eb..8acdf33899 100644
  				secondaryRequiredDrain:
  					strategy === undefined ? 0 : windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
  				primaryUsed: strategy ? normalizeUsageFraction(primary) : 0,
-@@ -506,7 +510,11 @@ export class CredentialSelector {
+@@ -553,7 +557,11 @@ export class CredentialSelector {
  				orderPos,
  			});
  		}
@@ -342,7 +342,7 @@ index 4d0ccd55eb..8acdf33899 100644
  	}
  
  	/**
-@@ -605,11 +613,17 @@ export class CredentialSelector {
+@@ -651,11 +659,17 @@ export class CredentialSelector {
  			sessionPreferredCanRefreshOrUse &&
  			!this.#deps.blocks.isBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
  		const sessionPinIsExplicit = sessionCredential?.type === "oauth" && sessionCredential.explicit === true;
@@ -361,7 +361,7 @@ index 4d0ccd55eb..8acdf33899 100644
  		// A warm automatic pin whose allowance is spent keeps serving on paid overage
  		// (Codex credits) and is never blocked, so check it and rank when spent: a
  		// sibling with renewable allowance left must take over (#13889). tryOAuth
-@@ -694,11 +708,21 @@ export class CredentialSelector {
+@@ -740,11 +754,21 @@ export class CredentialSelector {
  				candidate.selection.index === sessionPreferredIndex,
  		);
  		const preferredCandidate = sessionPreferredCandidate === -1 ? undefined : candidates[sessionPreferredCandidate];
@@ -386,7 +386,7 @@ index 4d0ccd55eb..8acdf33899 100644
  		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean => {
  			if (sessionPinIsExplicit || preferredCandidate === undefined) return false;
  			const rankedWinner = candidates.find(
-@@ -713,6 +737,18 @@ export class CredentialSelector {
+@@ -759,6 +783,18 @@ export class CredentialSelector {
  			) {
  				return true;
  			}
@@ -406,10 +406,10 @@ index 4d0ccd55eb..8acdf33899 100644
  				if (candidate === preferredCandidate) return false;
  				if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
 diff --git a/packages/ai/src/auth/types.ts b/packages/ai/src/auth/types.ts
-index 2f2d1ed6cf..8b3c8c0ca4 100644
+index b937153793..2b21be8ddb 100644
 --- a/packages/ai/src/auth/types.ts
 +++ b/packages/ai/src/auth/types.ts
-@@ -1117,8 +1117,15 @@ export interface OAuthApi {
+@@ -1150,8 +1150,15 @@ export interface OAuthApi {
  	 * Get the OAuth account identity for a provider, preferring the credential that
  	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
  	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
@@ -426,7 +426,7 @@ index 2f2d1ed6cf..8b3c8c0ca4 100644
  	/**
  	 * Return the configured account policy matching an OAuth identity.
  	 *
-@@ -1158,12 +1165,15 @@ export interface SessionsApi {
+@@ -1191,12 +1198,15 @@ export interface SessionsApi {
  	 * The durable credential id keeps the pin stable across credential refreshes,
  	 * storage reordering, and process restarts. By default this is an explicit
  	 * user pin: ranking and account reserve never evict it; hard unavailability
@@ -742,10 +742,10 @@ index 0000000000..b75dd18d0a
 +	});
 +});
 diff --git a/packages/ai/test/auth-storage-codex-selection.test.ts b/packages/ai/test/auth-storage-codex-selection.test.ts
-index baca667993..0eab33b60b 100644
+index 586d5070d7..a2c756b04e 100644
 --- a/packages/ai/test/auth-storage-codex-selection.test.ts
 +++ b/packages/ai/test/auth-storage-codex-selection.test.ts
-@@ -1100,11 +1100,18 @@ describe("AuthStorage codex oauth ranking", () => {
+@@ -1126,11 +1126,18 @@ describe("AuthStorage codex oauth ranking", () => {
  		if (!accountA || !accountB) throw new Error("expected both accounts");
  		const sessionId = "blocked-explicit-pin";
  
@@ -768,7 +768,7 @@ index baca667993..0eab33b60b 100644
  		// An unblocked sibling still wins over a blocked pin.
  		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-a");
  
-@@ -1113,6 +1120,7 @@ describe("AuthStorage codex oauth ranking", () => {
+@@ -1139,6 +1146,7 @@ describe("AuthStorage codex oauth ranking", () => {
  			retryAfterMs: HOUR_MS,
  		});
  		expect(authStorage.sessions.pin("openai-codex", sessionId, accountB.credentialId)).toBe(true);
@@ -776,7 +776,7 @@ index baca667993..0eab33b60b 100644
  		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-b");
  	});
  
-@@ -4235,7 +4243,7 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -4261,7 +4269,7 @@ describe("AuthStorage claude oauth ranking", () => {
  		expectExclusivePreference(counts, "api-acct-best", "api-acct-base-b");
  	});
  
@@ -785,7 +785,7 @@ index baca667993..0eab33b60b 100644
  		if (!authStorage) throw new Error("test setup failed");
  
  		await authStorage.credentials.set("anthropic", [
-@@ -4243,15 +4251,16 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -4269,15 +4277,16 @@ describe("AuthStorage claude oauth ranking", () => {
  			{ type: "oauth", ...createCredential("acct-cool", "cool@example.com") },
  		]);
  
@@ -806,7 +806,7 @@ index baca667993..0eab33b60b 100644
  			}),
  		);
  		usageByAccount.set(
-@@ -4325,7 +4334,7 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -4351,7 +4360,7 @@ describe("AuthStorage claude oauth ranking", () => {
  		expect(apiKey).toBe("api-acct-soon");
  	});
  
@@ -815,7 +815,7 @@ index baca667993..0eab33b60b 100644
  		if (!authStorage) throw new Error("test setup failed");
  
  		await authStorage.credentials.set("anthropic", [
-@@ -4360,8 +4369,9 @@ describe("AuthStorage claude oauth ranking", () => {
+@@ -4386,8 +4395,9 @@ describe("AuthStorage claude oauth ranking", () => {
  		);
  
  		const counts = await countApiKeySelections(authStorage, "anthropic", "weighted-claude-three");

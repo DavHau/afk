@@ -107,7 +107,7 @@ index 5d0de8c4d7..626d536a23 100644
  	/// entries.
  	fn clone_tree(
 diff --git a/crates/pi-iso/src/linux_reflink.rs b/crates/pi-iso/src/linux_reflink.rs
-index b92b320633..18ce3e511b 100644
+index d95b982084..4c24e4d680 100644
 --- a/crates/pi-iso/src/linux_reflink.rs
 +++ b/crates/pi-iso/src/linux_reflink.rs
 @@ -4,9 +4,12 @@
@@ -155,7 +155,7 @@ index b92b320633..18ce3e511b 100644
  			Err(IsoError::unavailable("Linux FICLONE reflink isolation is only available on Linux"))
  		}
  	}
-@@ -93,18 +100,30 @@ mod imp {
+@@ -89,18 +96,30 @@ mod imp {
  		tree::{self, TreeCopy},
  	};
  
@@ -190,7 +190,7 @@ index b92b320633..18ce3e511b 100644
  		})();
  		if result.is_err() {
  			let _ = fs::remove_dir_all(merged);
-@@ -123,7 +142,10 @@ mod imp {
+@@ -119,7 +138,10 @@ mod imp {
  		}
  	}
  
@@ -202,7 +202,7 @@ index b92b320633..18ce3e511b 100644
  
  	impl TreeCopy for Reflink {
  		fn symlink(&self, src: &Path, dst: &Path, file_type: FileType) -> IsoResult<()> {
-@@ -141,7 +163,7 @@ mod imp {
+@@ -137,7 +159,7 @@ mod imp {
  					src.display()
  				)));
  			}
@@ -211,7 +211,7 @@ index b92b320633..18ce3e511b 100644
  		}
  
  		fn finish_dir(&self, src: &Path, dst: &Path) -> IsoResult<()> {
-@@ -155,9 +177,12 @@ mod imp {
+@@ -151,9 +173,12 @@ mod imp {
  
  	/// Clones the regular file `src` into the fresh tree, then gives the clone
  	/// `src`'s mode and timestamps through the descriptors the clone used.
@@ -227,7 +227,7 @@ index b92b320633..18ce3e511b 100644
  		let meta = src_file
  			.metadata()
  			.map_err(|err| IsoError::other(format!("metadata {}: {err}", src.display())))?;
-@@ -175,6 +200,23 @@ mod imp {
+@@ -171,6 +196,23 @@ mod imp {
  		Ok(())
  	}
  
@@ -251,8 +251,8 @@ index b92b320633..18ce3e511b 100644
  	fn map_clone_error(src: &Path, dst: &Path, err: &std::io::Error) -> IsoError {
  		if cow::is_unsupported(err) {
  			return IsoError::unavailable(format!(
-@@ -211,3 +253,129 @@ mod imp {
- 		}
+@@ -197,3 +239,129 @@ mod imp {
+ 		fs::set_times_nofollow(path, times)
  	}
  }
 +
@@ -449,10 +449,10 @@ index edf2aa46ec..f27bbc80bb 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index d87dda1a5e..8441dc46a9 100644
+index 39e35ed96a..7b1aebfc60 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -2413,9 +2413,20 @@ export interface IsoResolveResult {
+@@ -2697,9 +2697,20 @@ export interface IsoResolveResult {
  
  /**
   * Materialise `merged` as a writable view of `lower` using the requested

@@ -36,11 +36,11 @@ lines are unchanged upstream; context shift only. Tests re-applied
 verbatim.
 
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index 0a8c074952..4dd54d40d1 100644
+index eae44ca2c7..c681ca0188 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -659,8 +659,17 @@ export async function ensureIsolation(
- 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
+@@ -664,8 +664,17 @@ export async function ensureIsolation(
+ 	const baseDir = taskIsolationBaseDir(repoRoot, id);
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
  	const resolution = await natives.isoResolve(preferred ?? null);
 -	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
@@ -60,10 +60,10 @@ index 0a8c074952..4dd54d40d1 100644
  	for (const candidate of candidates) {
  		await fs.rm(baseDir, { recursive: true, force: true });
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index ed21cc35b2..7038d5380f 100644
+index 78998f7d28..31019643a4 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
-@@ -252,6 +252,47 @@ describe("worktree isolation helpers", () => {
+@@ -273,6 +273,47 @@ describe("worktree isolation helpers", () => {
  			expect(handle.fallbackReason).toBe(unavailable.message);
  		});
  
@@ -85,9 +85,9 @@ index ed21cc35b2..7038d5380f 100644
 +				message.startsWith("ISO_UNAVAILABLE:"),
 +			);
 +
-+			await expect(
-+				ensureIsolation(repo, "pinned-no-fallback", natives.IsoBackendKind.Overlayfs),
-+			).rejects.toThrow("ISO_UNAVAILABLE: kernel overlay mount denied");
++			await expect(ensureIsolation(repo, "pinned-no-fallback", natives.IsoBackendKind.Overlayfs)).rejects.toThrow(
++				"ISO_UNAVAILABLE: kernel overlay mount denied",
++			);
 +
 +			expect(isoStart.mock.calls.map(call => call[0])).toEqual([natives.IsoBackendKind.Overlayfs]);
 +		});

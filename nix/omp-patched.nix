@@ -49,7 +49,19 @@
 # account ranker grew an opt-in reclaim eviction policy ahead of the
 # weekly-reset one; PythonKernel takes pythonPath before the hostEnv thunk;
 # eval.ts dropped the display() JSON machinery the named-kernel lane was
-# anchored on) in patches/omp/.
+# anchored on), then 18.18.0 (upstream put isolated-run workspaces behind
+# IsolatedRunOptions.openWorkspace — nativeWorkspace() over ensureIsolation,
+# or an ovnfs checkout when isolation.backend is auto and ovnfs is found —
+# so the VCS seam captures from workspace.dir, requireCow became
+# nativeWorkspace's second argument, and ovnfs opens only for git checkouts
+# (a pure jj workspace keeps the native snapshot, `.jj` pointer removed);
+# subagents may run on worker threads whose Settings are mirrors that never
+# load $OMP_DISTRO_CONFIG, so the mirror state now carries the distro layer;
+# per-call task `model` and file-backed tasks returned, so the required-flag
+# dispatch check runs after the new task/model validation and upstream's new
+# model-refusal and wire-schema tests send `isolated: false`; upstream's new
+# eval-timeout-contract test expects eval's 300 s default; task.md tables
+# were re-aligned; oxfmt-clean re-wraps of patch lines) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where
@@ -65,7 +77,9 @@
 #   behind a VcsHandle interface (src/task/vcs.ts). No behavior change.
 # - omp-jj-workspace-handle: JjWorkspaceHandle so isolated subagents work in
 #   pure jj workspaces (secondary `jj workspace add` trees, non-colocated
-#   repos); capture/merge go through jj's backing git store.
+#   repos); capture/merge go through jj's backing git store. Since 18.18.0
+#   a pure jj workspace never gets an ovnfs checkout (backend auto), only
+#   the native snapshot whose `.jj` pointer is removed.
 # - omp-jj-prompt-instructions: prompt wording only — hardcoded git
 #   instructions in system/orchestrate/plan-mode/commit-message prompts
 #   mention jj alongside git (`jj st`, git/jj subcommands, `jj describe`).
@@ -73,7 +87,9 @@
 #   read from $OMP_DISTRO_CONFIG (YAML), merged below the user's global
 #   config.yml — the wrapper ships opinionated defaults without owning the
 #   user's config file, so runtime writes (model selection, /settings)
-#   persist and override.
+#   persist and override. Since 18.18.0 the layer also rides the worker-
+#   thread settings mirror state (mirrors never load it themselves); ships
+#   test/config/distro-mirror.test.ts.
 # - omp-yield-array-sections: the yield tool's parameter schema
 #   (withSectionVariants) advertises the whole array branch for array-valued
 #   sections like `findings`, but the per-section validator only accepted a
@@ -116,8 +132,10 @@
 #   this build through the natives preBuild seam.
 # - omp-isolation-require-cow: task.isolation.requireCow (boolean,
 #   default false) plumbed settings -> structured-subagent ->
-#   isolation-runner -> ensureIsolation -> isoStart options; true
+#   nativeWorkspace -> ensureIsolation -> isoStart options; true
 #   restores the hard spawn failure when reflink cannot clone extents.
+#   (ovnfs checkouts, used only under isolation.backend auto, are not
+#   reflink clones and ignore it.)
 # - (dropped 18.2.10) omp-isolation-branch-capture-note: upstream's
 #   structured-subagent now renders a `capture-error` isolation summary
 #   (<system-notification> with result.error, patch path and any rescued

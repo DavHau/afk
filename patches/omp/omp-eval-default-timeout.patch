@@ -11,7 +11,9 @@ What must survive a rebase:
 - TOOL_TIMEOUTS.eval.default is 300 (min/max unchanged). Explicit
   `timeout` values and `timeout: 0` behave as upstream.
 - test/tools/eval-auto-background.test.ts asserts the default deadline in
-  the auto-background notice; it expects 300s.
+  the auto-background notice; it expects 300s. Since 18.18.0 upstream's
+  test/tools/eval-timeout-contract.test.ts also asserts the omitted-deadline
+  default; its row expects 300.
 
 diff --git a/packages/coding-agent/src/tools/tool-timeouts.ts b/packages/coding-agent/src/tools/tool-timeouts.ts
 index a0262f5205..b550fe84c5 100644
@@ -42,3 +44,17 @@ index ed4dd1fde2..933ab1ff74 100644
  		// The snapshot keeps the running cell (with its streamed tail) for the transcript.
  		expect(result.details?.cells?.[0]?.status).toBe("running");
  
+diff --git a/packages/coding-agent/test/tools/eval-timeout-contract.test.ts b/packages/coding-agent/test/tools/eval-timeout-contract.test.ts
+index 5411427b77..b1766cee40 100644
+--- a/packages/coding-agent/test/tools/eval-timeout-contract.test.ts
++++ b/packages/coding-agent/test/tools/eval-timeout-contract.test.ts
+@@ -43,7 +43,8 @@ describe("eval timeout admission contract", () => {
+ 		{ label: "minimum", timeout: 0.25, effective: 1 },
+ 		{ label: "negative minimum", timeout: -2, effective: 1 },
+ 		{ label: "fractional deadline", timeout: 1.25, effective: 1.25 },
+-		{ label: "omitted deadline", effective: 30 },
++		// afk: eval defaults to 300 s (omp-eval-default-timeout).
++		{ label: "omitted deadline", effective: 300 },
+ 		{ label: "capped default", cap: 4, effective: 4 },
+ 		{ label: "disabled deadline", timeout: 0, cap: 5, effective: 0 },
+ 	]) {

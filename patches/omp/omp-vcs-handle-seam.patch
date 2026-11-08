@@ -42,8 +42,20 @@ security/remediation no longer consumes IsolationContext (it has its own
 SecurityRemediationContext), so that test hunk is retired; the new
 isolation-release.test.ts carries the vcs field.
 
+Rebased 18.12.6 -> 18.18.0: upstream put workspace materialisation behind
+IsolatedRunOptions.openWorkspace (nativeWorkspace() over ensureIsolation,
+or an ovnfs checkout) and the runner now only sees an IsolationWorkspace
+`dir`; the seam's capture/commit calls take workspace.dir unchanged, and
+the runner no longer imports getRepoRoot/mergeTaskBranches/taskBranchRef.
+isolation-release.test.ts passes `openWorkspace: nativeWorkspace(undefined)`
+next to the vcs field.
+
+Also since 18.18.0: structured-subagent.test.ts's mocked isolation contexts
+carry the vcs field (openIsolatedWorkspace reads vcs.kind, see
+omp-jj-workspace-handle).
+
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index ca5ef1d532..cec26ccce1 100644
+index d5c27314d2..0783615958 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
 @@ -8,7 +8,7 @@
@@ -63,28 +75,30 @@ index ca5ef1d532..cec26ccce1 100644
  import { prompt } from "@oh-my-pi/pi-utils";
  import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
  import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
-@@ -34,19 +33,12 @@ import type { ExecutorOptions } from "./executor";
+@@ -34,20 +33,8 @@ import type { ExecutorOptions } from "./executor";
  import { runSubprocess } from "./executor";
  import { needsNativeTeardown, writeRetainedBackend } from "./isolation-ownership";
  import type { NestedRepoPatch, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
-+import { resolveVcsHandle, type VcsHandle } from "./vcs";
- import {
+-import {
 -	applyNestedPatches,
 -	captureDeltaPatch,
 -	captureIsolationBaseline,
- 	cleanupIsolation,
+-	cleanupIsolation,
 -	cleanupTaskBranches,
- 	type CommitToBranchResult,
+-	type CommitToBranchResult,
 -	commitToBranch,
- 	ensureIsolation,
+-	ensureIsolation,
 -	getRepoRoot,
- 	type IsolationHandle,
 -	mergeTaskBranches,
 -	taskBranchRef,
- 	type WorktreeBaseline,
- } from "./worktree";
+-	type WorktreeBaseline,
+-} from "./worktree";
++import { resolveVcsHandle, type VcsHandle } from "./vcs";
++import { cleanupIsolation, type CommitToBranchResult, ensureIsolation, type WorktreeBaseline } from "./worktree";
  
-@@ -96,54 +88,23 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
+ import { cfgTaskIsolationCommits } from "./settings";
+ 
+@@ -95,54 +82,23 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
  	return { ...result, isolated: true };
  }
  
@@ -149,7 +163,7 @@ index ca5ef1d532..cec26ccce1 100644
  }
  
  /** Fingerprint of a captured delta, used to skip re-committing an unchanged workspace on release. */
-@@ -263,12 +224,13 @@ interface IsolationPatchCapture {
+@@ -262,12 +218,13 @@ interface IsolationPatchCapture {
   * down. Throws when any write fails so nothing captured is ever the only copy.
   */
  async function writeIsolationPatch(
@@ -164,41 +178,41 @@ index ca5ef1d532..cec26ccce1 100644
  	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
  	await Bun.write(patchPath, delta.rootPatch);
  	const nestedPatchPaths = await persistNestedPatches(artifactsDir, agentId, delta.nestedPatches);
-@@ -410,7 +372,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -449,7 +406,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  			try {
  				let capture: IsolationPatchCapture;
  				try {
--					capture = await writeIsolationPatch(handle.mergedDir, taskBaseline, opts.artifactsDir, opts.agentId);
+-					capture = await writeIsolationPatch(workspace.dir, taskBaseline, opts.artifactsDir, opts.agentId);
 +					capture = await writeIsolationPatch(
 +						opts.context.vcs,
-+						handle.mergedDir,
++						workspace.dir,
 +						taskBaseline,
 +						opts.artifactsDir,
 +						opts.agentId,
 +					);
  				} catch (captureErr) {
  					retainWorkspace = true;
- 					const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
-@@ -431,7 +399,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+ 					const retained = await workspace.retain();
+@@ -470,7 +433,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  				// Nothing changed since the run-end capture the caller already
  				// merged or applied: a branch now would only duplicate that work.
  				if (capture.fingerprint === handedOff) return;
 -				const commitResult = await commitToBranch(
 +				const commitResult = await opts.context.vcs.commitToTaskRef(
- 					handle.mergedDir,
+ 					workspace.dir,
  					taskBaseline,
  					opts.agentId,
-@@ -453,7 +421,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
- 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
- 		const isolationDir = handle.mergedDir;
- 		const isolationBackend = handle.backend;
+@@ -491,7 +454,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+ 	try {
+ 		workspace = await opts.openWorkspace(opts.context.repoRoot, opts.agentId);
+ 		const isolationDir = workspace.dir;
 -		const baseline = await captureIsolationBaseline(isolationDir, opts.context.repoRoot);
 +		const vcs = opts.context.vcs;
 +		const baseline = await vcs.captureIsolationBaseline(isolationDir);
  		taskBaseline = baseline;
  		const result = await runSubprocess({
  			...opts.baseOptions,
-@@ -482,7 +451,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -523,7 +487,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		if (opts.mergeMode === "branch" && result.exitCode === 0) {
  			let commitResult: CommitToBranchResult | null;
  			try {
@@ -207,7 +221,7 @@ index ca5ef1d532..cec26ccce1 100644
  					isolationDir,
  					baseline,
  					opts.agentId,
-@@ -490,22 +459,28 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -531,22 +495,22 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  					opts.buildCommitMessage?.(),
  				);
  			} catch (mergeErr) {
@@ -231,17 +245,11 @@ index ca5ef1d532..cec26ccce1 100644
  				const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
  				try {
 -					const capture = await writeIsolationPatch(isolationDir, baseline, opts.artifactsDir, opts.agentId);
-+					const capture = await writeIsolationPatch(
-+						vcs,
-+						isolationDir,
-+						baseline,
-+						opts.artifactsDir,
-+						opts.agentId,
-+					);
++					const capture = await writeIsolationPatch(vcs, isolationDir, baseline, opts.artifactsDir, opts.agentId);
  					return rememberAgentArtifacts({
  						...result,
  						...capture.artifacts,
-@@ -562,7 +537,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -603,7 +567,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		}
  		if (result.exitCode === 0) {
  			try {
@@ -250,7 +258,7 @@ index ca5ef1d532..cec26ccce1 100644
  				handedOff = capture.fingerprint;
  				return rememberAgentArtifacts({ ...result, ...capture.artifacts });
  			} catch (patchErr) {
-@@ -603,7 +578,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -648,7 +612,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  
  export interface IsolationMergeOptions {
  	result: SingleResult;
@@ -259,7 +267,7 @@ index ca5ef1d532..cec26ccce1 100644
  	mergeMode: "patch" | "branch";
  }
  
-@@ -631,8 +606,8 @@ export interface IsolationMergeOutcome {
+@@ -676,8 +640,8 @@ export interface IsolationMergeOutcome {
   * instead.
   */
  export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise<IsolationMergeOutcome> {
@@ -270,7 +278,7 @@ index ca5ef1d532..cec26ccce1 100644
  	try {
  		if (mergeMode === "branch") {
  			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
-@@ -660,7 +635,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -705,7 +669,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  					mergedBranchForNestedPatches: canApplyNestedOnly,
  				};
  			}
@@ -279,7 +287,7 @@ index ca5ef1d532..cec26ccce1 100644
  				{
  					branchName: result.branchName,
  					taskId: result.id,
-@@ -688,7 +663,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -733,7 +697,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  
  			// Clean up the merged branch (keep failed ones for manual resolution)
  			if (changesApplied) {
@@ -288,7 +296,7 @@ index ca5ef1d532..cec26ccce1 100644
  			}
  			return { summary, changesApplied, hadAnyChanges, mergedBranchForNestedPatches };
  		}
-@@ -720,8 +695,8 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -765,8 +729,8 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  				// `--3way --check`, which exits 0 even when the real apply would
  				// leave conflict markers and unmerged index entries.
  				const [alreadyApplied, forwardApplies] = await Promise.all([
@@ -299,7 +307,7 @@ index ca5ef1d532..cec26ccce1 100644
  				]);
  				hadAnyChanges = false;
  				if (alreadyApplied && !forwardApplies) {
-@@ -729,7 +704,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -774,7 +738,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  				} else if (forwardApplies) {
  					changesApplied = true;
  					try {
@@ -308,7 +316,7 @@ index ca5ef1d532..cec26ccce1 100644
  						hadAnyChanges = true;
  					} catch {
  						changesApplied = false;
-@@ -772,7 +747,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
+@@ -817,7 +781,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
  export interface NestedPatchApplyOptions {
  	/** Subagent result carrying `nestedPatches`/`exitCode`/`aborted`. */
  	result: SingleResult;
@@ -317,7 +325,7 @@ index ca5ef1d532..cec26ccce1 100644
  	mergeMode: "patch" | "branch";
  	/** Parent merge outcome — patch mode skips nested apply when this is `false`. */
  	changesApplied: boolean | null;
-@@ -792,7 +767,7 @@ export interface NestedPatchApplyOptions {
+@@ -837,7 +801,7 @@ export interface NestedPatchApplyOptions {
   * or an empty string when nothing was applied or the nested apply succeeded.
   */
  export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions): Promise<string> {
@@ -326,7 +334,7 @@ index ca5ef1d532..cec26ccce1 100644
  	if (mergeMode === "patch" && changesApplied === false) return "";
  	const nestedPatches = result.nestedPatches ?? [];
  	const eligible =
-@@ -802,7 +777,7 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
+@@ -847,7 +811,7 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
  		(mergeMode !== "branch" || mergedBranchForNestedPatches);
  	if (!eligible) return "";
  	try {
@@ -336,10 +344,10 @@ index ca5ef1d532..cec26ccce1 100644
  		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
  	} catch (applyErr) {
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index 26dd635938..f830cd0427 100644
+index 1cec5a24de..26b674aa43 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -914,7 +914,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -1113,7 +1113,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  		) {
  			const outcome = await mergeIsolatedChanges({
  				result,
@@ -348,7 +356,7 @@ index 26dd635938..f830cd0427 100644
  				mergeMode: policy.mergeMode,
  			});
  			mergeSummary = outcome.summary;
-@@ -922,7 +922,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -1121,7 +1121,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  			if (outcome.changesApplied !== false) {
  				const nestedPatchSummary = await applyEligibleNestedPatches({
  					result,
@@ -552,7 +560,7 @@ index 0000000000..40bf9d7669
 +	return new GitCheckoutHandle(root);
 +}
 diff --git a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
-index b32e4ea421..46866d1056 100644
+index 8ab25993b4..077c311c9e 100644
 --- a/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 +++ b/packages/coding-agent/test/eval/agent-bridge-policy.test.ts
 @@ -22,6 +22,7 @@ import * as taskExecutor from "../../src/task/executor";
@@ -563,7 +571,7 @@ index b32e4ea421..46866d1056 100644
  import type { AgentProgress, SingleResult, StructuredSubagentOutput } from "@oh-my-pi/pi-tui/tools/task";
  import type { ToolSession } from "../../src/tools";
  
-@@ -1060,7 +1061,10 @@ describe("runEvalAgent isolation", () => {
+@@ -1079,7 +1080,10 @@ describe("runEvalAgent isolation", () => {
  
  	function mockIsolationContext(): { repoRoot: string } {
  		const repoRoot = "/repo-root";
@@ -575,7 +583,7 @@ index b32e4ea421..46866d1056 100644
  		return { repoRoot };
  	}
  
-@@ -1183,6 +1187,7 @@ describe("runEvalAgent isolation", () => {
+@@ -1202,6 +1206,7 @@ describe("runEvalAgent isolation", () => {
  		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
  			ops.push("prepare");
  			return {
@@ -584,7 +592,7 @@ index b32e4ea421..46866d1056 100644
  				baseline: {
  					root: {
 diff --git a/packages/coding-agent/test/eval/agent-bridge.test.ts b/packages/coding-agent/test/eval/agent-bridge.test.ts
-index 15d9bb4a54..95cf29a15d 100644
+index cf641a338b..5ae68fab32 100644
 --- a/packages/coding-agent/test/eval/agent-bridge.test.ts
 +++ b/packages/coding-agent/test/eval/agent-bridge.test.ts
 @@ -13,6 +13,7 @@ import * as taskExecutor from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -595,7 +603,7 @@ index 15d9bb4a54..95cf29a15d 100644
  import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
  import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
  
-@@ -157,7 +158,10 @@ describe("runEvalAgent", () => {
+@@ -158,7 +159,10 @@ describe("runEvalAgent", () => {
  		const session = createBudgetSession(sessionManager);
  		cfgTaskIsolationEnabled.set(session.settings, true);
  		vi.spyOn(taskDiscovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
@@ -608,44 +616,95 @@ index 15d9bb4a54..95cf29a15d 100644
  			options.onSubprocessResult?.(createResult({ usage: createUsage(4_567) }));
  			throw new Error("cleanup failed");
 diff --git a/packages/coding-agent/test/task/isolation-release.test.ts b/packages/coding-agent/test/task/isolation-release.test.ts
-index 2dd6eba7d4..7b7c43f01c 100644
+index 784414adce..90cad3446d 100644
 --- a/packages/coding-agent/test/task/isolation-release.test.ts
 +++ b/packages/coding-agent/test/task/isolation-release.test.ts
 @@ -7,6 +7,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
  import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
  import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
- import { runIsolatedSubprocess } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+ import { nativeWorkspace, runIsolatedSubprocess } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 +import { GitCheckoutHandle } from "@oh-my-pi/pi-coding-agent/task/vcs";
  import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
  import * as natives from "@oh-my-pi/pi-natives";
  import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
-@@ -98,7 +99,7 @@ async function commitsAcrossRelease(id: string, runEndPatch: string, releasePatc
+@@ -101,7 +102,7 @@ async function commitsAcrossRelease(id: string, runEndPatch: string, releasePatc
  			index: 0,
  			id,
  		},
 -		context: { repoRoot: "/repo" },
 +		context: { vcs: new GitCheckoutHandle("/repo"), repoRoot: "/repo" },
- 		preferredBackend: undefined,
+ 		openWorkspace: nativeWorkspace(undefined),
  		agentId: id,
  		mergeMode: "branch",
+diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
+index 22668671c1..ceb34423df 100644
+--- a/packages/coding-agent/test/task/structured-subagent.test.ts
++++ b/packages/coding-agent/test/task/structured-subagent.test.ts
+@@ -48,6 +48,7 @@ import {
+ 	type StructuredSubagentRequest,
+ } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
+ import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
++import { GitCheckoutHandle } from "@oh-my-pi/pi-coding-agent/task/vcs";
+ import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
+ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+ import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+@@ -1331,7 +1332,10 @@ describe("structured subagent primitive", () => {
+ 	it("retains isolated failure artifacts needed for recovery", async () => {
+ 		mockDiscovery();
+ 		let artifactsDir: string | undefined;
+-		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
++		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
++			vcs: new GitCheckoutHandle("/tmp"),
++			repoRoot: "/tmp",
++		});
+ 		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async ({ baseOptions }) => {
+ 			artifactsDir = baseOptions.artifactsDir;
+ 			return { ...result(), exitCode: 1, error: "agent failed", patchPath: "/recovery/Worker.patch" };
+@@ -1348,7 +1352,10 @@ describe("structured subagent primitive", () => {
+ 
+ 	it("names the preserved branch when nested persistence fails after a branch commit", async () => {
+ 		mockDiscovery();
+-		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
++		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
++			vcs: new GitCheckoutHandle("/tmp"),
++			repoRoot: "/tmp",
++		});
+ 		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async () => ({
+ 			...result(),
+ 			branchName: "omp/task/Worker",
+@@ -1393,7 +1400,10 @@ describe("structured subagent primitive", () => {
+ 	it("retains successful isolated task artifacts when auto-apply is disabled", async () => {
+ 		mockDiscovery();
+ 		let artifactsDir: string | undefined;
+-		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
++		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
++			vcs: new GitCheckoutHandle("/tmp"),
++			repoRoot: "/tmp",
++		});
+ 		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async ({ baseOptions }) => {
+ 			artifactsDir = baseOptions.artifactsDir;
+ 			return { ...result(), patchPath: "/recovery/Worker.patch" };
 diff --git a/packages/coding-agent/test/task/task-spawn.test.ts b/packages/coding-agent/test/task/task-spawn.test.ts
-index 8737b925d9..5f2299c755 100644
+index 518511dc80..f8f64b96f2 100644
 --- a/packages/coding-agent/test/task/task-spawn.test.ts
 +++ b/packages/coding-agent/test/task/task-spawn.test.ts
-@@ -25,6 +25,7 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+@@ -26,6 +26,7 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
  import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
  import * as isolationRunner from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
  import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 +import { GitCheckoutHandle } from "@oh-my-pi/pi-coding-agent/task/vcs";
  import type { AgentProgress, SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
  import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
- import { snapshotJobs } from "@oh-my-pi/pi-coding-agent/async/job-control";
-@@ -249,7 +250,7 @@ describe("task spawn routing", () => {
+ import { WaitTool } from "@oh-my-pi/pi-coding-agent/tools/wait";
+@@ -305,7 +306,10 @@ describe("task spawn routing", () => {
  				projectAgentsDir: null,
  			});
  			const repoRoot = "/repo-root";
 -			vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot });
-+			vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ vcs: new GitCheckoutHandle(repoRoot), repoRoot });
++			vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
++				vcs: new GitCheckoutHandle(repoRoot),
++				repoRoot,
++			});
  			vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => ({
  				...makeResult(opts.agentId),
  				isolated: true,

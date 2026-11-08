@@ -166,10 +166,10 @@ index 4869a6a011..58dbb03ebd 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index afcb3d4ddd..5d223d74ad 100644
+index 8bbefbde31..073b9c26d2 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
-@@ -491,6 +491,55 @@ describe("YieldTool", () => {
+@@ -533,6 +533,55 @@ describe("YieldTool", () => {
  		).rejects.toThrow(/Section "findings" does not match schema.*body/);
  	});
  

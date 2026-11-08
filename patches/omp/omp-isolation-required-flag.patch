@@ -52,37 +52,48 @@ task-batch.test.ts; a new agent-loop test proves the lenient path rejects
 a call without `isolated`; failed-child-artifact.test.ts fixtures gained
 explicit isolated: false.
 
+Rebased 18.12.6 -> 18.18.0: upstream re-added per-call `model`
+(task.perCallModel, validated in validateSpawnParams via validateModel)
+and file-backed tasks (validateTaskInput, task.file); validateSpawnParams
+and planSpawns take isolationRequired after those new parameters, and the
+missing-`isolated` check runs after the task/effort/model checks. The
+docs table was re-aligned upstream. Upstream's new "refuses model/
+sourceSession on an ordinary agent" agent-loop test sends `isolated:
+false` for its isolation-enabled rows so it still reaches the model/
+seance refusal it asserts; likewise upstream's new wire-schema.test.ts
+per-call-model cases (flat taskSchema, isolated batch variants).
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 4102c9c21a..7ee4f88bf5 100644
+index 83a2c9649f..1807f09356 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -32,7 +32,7 @@
+@@ -34,7 +34,7 @@
  
  ## Inputs
  
--The wire schema is shape-swapped by `task.batch` (default on). One unit of work is `{ name?, agent?, task, solutionSpace, effort?, outputSchema?, schemaMode?, tools?, isolated? }`. `isolated` exists only when `task.isolation.enabled` is true **and plan mode is disabled**; `effort` requires `task.enableEffort=true` (default off), and `tools` requires `eval.tools.enabled` (default on).
-+The wire schema is shape-swapped by `task.batch` (default on). One unit of work is `{ name?, agent?, task, solutionSpace, effort?, outputSchema?, schemaMode?, tools?, isolated }`. `isolated` exists — and is then required — only when `task.isolation.enabled` is true **and plan mode is disabled**; `effort` requires `task.enableEffort=true` (default off), and `tools` requires `eval.tools.enabled` (default on).
+-The wire schema is shape-swapped by `task.batch` (default on). One unit of work is `{ name?, agent?, model?, task, solutionSpace, effort?, outputSchema?, schemaMode?, tools?, isolated? }`. `isolated` exists only when `task.isolation.enabled` is true **and plan mode is disabled**; `effort` requires `task.enableEffort=true` (default off), and `tools` requires `eval.tools.enabled` (default on).
++The wire schema is shape-swapped by `task.batch` (default on). One unit of work is `{ name?, agent?, model?, task, solutionSpace, effort?, outputSchema?, schemaMode?, tools?, isolated }`. `isolated` exists — and is then required — only when `task.isolation.enabled` is true **and plan mode is disabled**; `effort` requires `task.enableEffort=true` (default off), and `tools` requires `eval.tools.enabled` (default on).
  
- - **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `outputSchema`, and `schemaMode` are per item. `effort` is added only when its setting enables it; `isolated` additionally requires plan mode to be disabled.
- - **Flat shape** (`task.batch` off): `{ ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each spawn's `task` references; subagents share the parent's `local://` root.
-@@ -51,7 +51,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
- | `outputSchema` | JSON Schema (`object \| boolean \| string \| null` at the coarse wire-validation layer) | No | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape. |
- | `schemaMode` | `"permissive" \| "strict"` | No | Validation mode for the effective output schema. Overrides the parent mode; defaults to `permissive`. After schema-retry exhaustion, permissive mode can accept invalid payloads with a warning; strict mode fails. Invalid caller schemas fail preflight in either mode. |
- | `tools` | `string[]` | No | Named tools already defined in the parent's Python or JS eval kernel. Present when `eval.tools.enabled=true`; child calls execute in the parent kernel, not the child's. Rejected in plan mode. Item field in batch shape, top-level in flat shape. |
--| `isolated` | `boolean` | No | Run in an isolated workspace and capture patches/branch changes. Present only when `task.isolation.enabled` is true and plan mode is disabled. Kept-alive task agents retain their workspace through idle/parked transitions and can be revived; release captures final changes and cleans the workspace. |
-+| `isolated` | `boolean` | Yes (when present) | Run in an isolated workspace and capture patches/branch changes. Present only when `task.isolation.enabled` is true and plan mode is disabled, and is then required — the caller must choose explicitly per spawn; a call that omits it is rejected at dispatch even though lenient argument validation forwards it past the wire schema. Kept-alive task agents retain their workspace through idle/parked transitions and can be revived; release captures final changes and cleans the workspace. |
+ `task.file` defaults to `false`: `task` is required, and `taskFile` is absent from the wire schema and rejected at runtime. Enable `task.file` to provide exactly one of `task` or `taskFile` per item, in either shape.
+ 
+@@ -56,7 +56,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work
+ | `outputSchema`  | JSON Schema (`object \| boolean \| string \| null` at the coarse wire-validation layer) | No                                    | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+ | `schemaMode`    | `"permissive" \| "strict"`                                                              | No                                    | Validation mode for the effective output schema. Overrides the parent mode; defaults to `permissive`. After schema-retry exhaustion, permissive mode can accept invalid payloads with a warning; strict mode fails. Invalid caller schemas fail preflight in either mode.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+ | `tools`         | `string[]`                                                                              | No                                    | Named tools already defined in the parent's Python or JS eval kernel. Present when `eval.tools.enabled=true`; child calls execute in the parent kernel, not the child's. Rejected in plan mode. Item field in batch shape, top-level in flat shape.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+-| `isolated`      | `boolean`                                                                               | No                                    | Run in an isolated workspace and capture patches/branch changes. Present only when `task.isolation.enabled` is true and plan mode is disabled. Kept-alive task agents retain their workspace through idle/parked transitions and can be revived; release captures final changes and cleans the workspace.                                                                                                                                                                                                                                                                                                                                                                                                  |
++| `isolated`      | `boolean`                                                                               | Yes (when present)                    | Run in an isolated workspace and capture patches/branch changes. Present only when `task.isolation.enabled` is true and plan mode is disabled, and is then required — the caller must choose explicitly per spawn; a call that omits it is rejected at dispatch even though lenient argument validation forwards it past the wire schema. Kept-alive task agents retain their workspace through idle/parked transitions and can be revived; release captures final changes and cleans the workspace.                                                                                                                                                                                                       |
  
  There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
  
-@@ -135,7 +135,7 @@ Artifacts and side channels:
-   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, with `agent`, `outputSchema`, and `schemaMode` per item. `effort` appears only when its setting enables it; `isolated` also requires plan mode to be disabled. Lifecycle, revival, and concurrency semantics match N parallel single calls.
-   - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
+@@ -163,7 +163,7 @@ Artifacts and side channels:
+    - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema, with the same conditional `effort`/`isolated` fields.
  - Speculative launch (`task.speculativeLaunch`, default on; batch mode only) — while a `{ context, tasks[] }` call streams, the tool's stream session (`src/task/speculative-launch.ts`) starts each item's `SpawnRun` as soon as that item's JSON object closes (`context` must already have closed), and starts the remainder when the call finishes streaming. Dispatch adopts runs whose normalized spawn params still match; an invalid finished call, launched items that differ from the finished call, a blocking hook, or an aborted turn aborts every launched run. Launches need host authorization (`authorizeLaunch`): auto-allowed `task` approval and no extension `tool_call`/`tool_result`/approval lifecycle handlers.
--- Isolation is available when `task.isolation.enabled` is true: each task must set `isolated: true` to use a separate checkout; omitted or `false` tasks share the parent checkout. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
-+- Isolation is available when `task.isolation.enabled` is true: each task must set `isolated` explicitly — `true` uses a separate checkout, `false` shares the parent checkout, and a task that omits it is rejected. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback.
- - Workspace resolution: a git checkout uses the git machinery above; a pure jj workspace (`jj workspace add` secondary, or non-colocated repo) runs capture against jj's backing git store (baseline = the isolation copy's tree on top of the `@` commit, task refs parked as `refs/omp/task/<id>` in the store) and lands merges as a described jj commit — 3-way merged in-store via `git merge-tree`, so a conflict leaves the workspace untouched and the ref parked. The snapshot's `.jj` pointer is removed before the subagent runs, so nothing inside isolation can write through to the shared store. Nested git repos under a jj workspace are not captured.
+   File-backed items wait for dispatch so their bytes are read at dispatch time. Encountering a `taskFile` item stops further speculative launches for that call.
+-- Isolation is available when `task.isolation.enabled` is true: each task must set `isolated: true` to use a separate checkout; omitted or `false` tasks share the parent checkout. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback; `auto` uses ovnfs for isolated subagents when it is found (below).
++- Isolation is available when `task.isolation.enabled` is true: each task must set `isolated` explicitly — `true` uses a separate checkout, `false` shares the parent checkout, and a task that omits it is rejected. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback; `auto` uses ovnfs for isolated subagents when it is found (below).
+ - ovnfs (active whenever the binary is found — `ovnfs.path`, default `ovnfs` on PATH): the system prompt gains a "Separate checkouts" section telling agents to open ovnfs checkouts (`ovnfs new`, `diff`, `apply`, `rm`) instead of `git worktree add`, `git clone` or `cp -r`. When `task.isolation.enabled` also allows isolated tasks and `isolation.backend` is `auto`, each isolated subagent works in an ovnfs checkout — a copy-on-write view of the repo with a private git dir, served by the ovnfs daemon — instead of a native clone. omp runs `ovnfs --json start` to make sure the daemon runs and learn its admin socket, then opens (`new`) and removes (`rm`) one checkout per run over that Unix socket. Capture, merge and apply are the same as for native workspaces. The run's task-isolation dir records the checkout (`.omp-ovnfs-checkout.json`) so `omp worktree clear` removes checkouts of crashed runs; a checkout whose changes could not be captured is kept like a native workspace. Without the binary, isolation stays native; once ovnfs is found there is no fallback: if it fails, the isolated task fails and says so.
+ - Workspace resolution: a git checkout uses the git machinery above; a pure jj workspace (`jj workspace add` secondary, or non-colocated repo) runs capture against jj's backing git store (baseline = the isolation copy's tree on top of the `@` commit, task refs parked as `refs/omp/task/<id>` in the store) and lands merges as a described jj commit — 3-way merged in-store via `git merge-tree`, so a conflict leaves the workspace untouched and the ref parked. The snapshot's `.jj` pointer is removed before the subagent runs, so nothing inside isolation can write through to the shared store. Nested git repos under a jj workspace are not captured. ovnfs checkouts (`isolation.backend: auto`) serve git checkouts only; a pure jj workspace always takes the native snapshot.
  - Isolation merge strategy: `task.isolation.merge` selects patch mode (capture/apply root patches) or branch mode (commit to the hidden ref `refs/omp/task/<id>` — outside `refs/heads/` so colocated jj checkouts never import/abandon it — then cherry-pick into parent; the short name `omp/task/<id>` still resolves in every git command). `task.isolation.apply=false` retains captured changes without applying them; nested repositories get separate patch artifacts.
- - Eval-defined tools: `tools` resolves names across the parent's retained Python/JS kernels. Unknown names, disabled sharing, or the same name defined in both kernels fail preflight; these tools are not available in plan mode.
 diff --git a/packages/coding-agent/src/commit/agentic/tools/analyze-file.ts b/packages/coding-agent/src/commit/agentic/tools/analyze-file.ts
 index f5d87ba849..30634306b2 100644
 --- a/packages/coding-agent/src/commit/agentic/tools/analyze-file.ts
@@ -98,12 +109,12 @@ index f5d87ba849..30634306b2 100644
  					return taskTool.execute(`${toolCallId}-${index + 1}`, taskParams, signal);
  				}),
 diff --git a/packages/coding-agent/src/prompts/tools/task.md b/packages/coding-agent/src/prompts/tools/task.md
-index 0b90617b3b..9d7db8df35 100644
+index 82508c2791..448782cf75 100644
 --- a/packages/coding-agent/src/prompts/tools/task.md
 +++ b/packages/coding-agent/src/prompts/tools/task.md
-@@ -21,8 +21,8 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
- {{#if evalToolsEnabled}}`tools`: eval-defined, run in your kernel.
+@@ -24,8 +24,8 @@ Shared edits need one integration owner; give each task its files. Set interface
  {{/if}}{{#if effortEnabled}}`effort`: `"lo"`|`"med"`|`"hi"` by how open-ended the problem is.
+ {{/if}}{{#if perCallModelEnabled}}`model`: one exact `provider/model-id[@upstream][:level]` string for this spawn only{{#if batchEnabled}}; per `tasks[]` item{{/if}}. `@upstream` pins an aggregator route and is part of the model identity. Only operator-approved models; no roles, arrays, globs or partial IDs. Approved: {{#list perCallModelAdvertisement.roles join=", "}}{{#list patterns join=", "}}`{{this}}`{{/list}} ({{role}}){{/list}}{{#if perCallModelAdvertisement.roles.length}}; {{/if}}{{#if perCallModelAdvertisement.parentModelWithheld}}{{else}}your own current model; {{/if}}the selected bundled/user agent's own configured model. A listed glob approves matching exact IDs; write the exact ID, NEVER the glob.{{#if perCallModelAdvertisement.allowlist.length}} Allowlist: {{#list perCallModelAdvertisement.allowlist join=", "}}`{{this}}`{{/list}} (must also be approved).{{/if}} An agent's `task.agentModelOverrides` entry or user-chosen effort conflicts with `model`. Omit unless needed. Requested model unavailable → stop and report; NEVER substitute another. Every request requires an approved model; retry fallback, context promotion and prewalk are off.
  {{/if}}{{#if structured}}`schemaMode`: default permissive warns after retries; strict fails.
 -{{/if}}{{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: worktree; successful changes apply to parent.
 -{{else}}`isolated`: worktree; changes retained, not applied.
@@ -113,10 +124,10 @@ index 0b90617b3b..9d7db8df35 100644
  
  # Format
 diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
-index 745ef98c77..3b7f0ffcfc 100644
+index d44f7d87b3..84da674862 100644
 --- a/packages/coding-agent/src/task/index.ts
 +++ b/packages/coding-agent/src/task/index.ts
-@@ -253,13 +253,28 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
+@@ -274,6 +274,17 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
   * undefined when valid.
   */
  
@@ -134,26 +145,18 @@ index 745ef98c77..3b7f0ffcfc 100644
  /** Reject an out-of-range `effort` selector on internal/stale-transcript calls that bypass the wire schema. */
  function validateEffort(effort: TaskEffort | undefined, label: string): string | undefined {
  	if (effort === undefined || TASK_EFFORTS.includes(effort)) return undefined;
- 	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use "lo", "med", or "hi".`;
- }
- 
--function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string | undefined {
-+function validateSpawnParams(
-+	params: TaskParams,
-+	batchEnabled: boolean,
+@@ -312,6 +323,7 @@ function validateSpawnParams(
+ 	fileEnabled: boolean,
+ 	defaultAgent: string,
+ 	settings: Settings,
 +	isolationRequired: boolean,
-+): string | undefined {
- 	const hasTask = typeof params.task === "string" && params.task.trim() !== "";
+ ): string | undefined {
  	const tasks = params.tasks;
- 	if (batchEnabled && tasks !== undefined) {
-@@ -274,8 +289,13 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
- 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
- 				return `Task ${i + 1}${item?.name ? ` (\`${item.name}\`)` : ""} is missing \`task\`. Every task needs complete, self-contained instructions.`;
- 			}
--			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
-+			const label = `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`;
-+			const effortError = validateEffort(item.effort, label);
+ 	if (
+@@ -336,6 +348,10 @@ function validateSpawnParams(
  			if (effortError) return effortError;
+ 			const modelError = validateModel(item, label, defaultAgent, settings);
+ 			if (modelError) return modelError;
 +			if (isolationRequired) {
 +				const isolatedError = missingIsolatedReason(item.isolated, label);
 +				if (isolatedError) return isolatedError;
@@ -161,41 +164,39 @@ index 745ef98c77..3b7f0ffcfc 100644
  		}
  		const seen = new Map<string, string>();
  		for (const item of tasks) {
-@@ -298,7 +318,10 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
- 			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
- 			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
- 	}
--	return validateEffort(params.effort, "The call");
-+	return (
-+		validateEffort(params.effort, "The call") ??
+@@ -359,7 +375,8 @@ function validateSpawnParams(
+ 	return (
+ 		validateTaskInput(params, "The call", fileEnabled) ??
+ 		validateEffort(params.effort, "The call") ??
+-		validateModel(params, "The call", defaultAgent, settings)
++		validateModel(params, "The call", defaultAgent, settings) ??
 +		(isolationRequired ? missingIsolatedReason(params.isolated, "The call") : undefined)
-+	);
+ 	);
  }
  
- /**
-@@ -369,11 +392,12 @@ function planSpawns(
- 	batchEnabled: boolean,
+@@ -521,11 +538,12 @@ function planSpawns(
  	defaultAgent: string,
  	seanceAdvertised: boolean,
+ 	settings: Settings,
 +	isolationRequired: boolean,
  ): SpawnPlan | string {
  	const params = repairTaskParams(rawParams as TaskParams);
  	const error =
  		validateShapeParams(batchEnabled, params) ??
--		validateSpawnParams(params, batchEnabled) ??
-+		validateSpawnParams(params, batchEnabled, isolationRequired) ??
+-		validateSpawnParams(params, batchEnabled, fileEnabled, defaultAgent, settings) ??
++		validateSpawnParams(params, batchEnabled, fileEnabled, defaultAgent, settings, isolationRequired) ??
  		validateSeanceParams({ params, batchEnabled, defaultAgent, seanceAdvertised });
  	if (error) return error;
  	const items = resolveSpawnItems(params);
-@@ -679,6 +703,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 				this.#isBatchEnabled(),
+@@ -861,6 +879,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  				this.#defaultAgent(),
  				this.#seanceSchemaFields() !== undefined,
+ 				this.session.settings,
 +				this.#isIsolationExposed(),
  			);
  			return typeof plan === "string" ? undefined : plan.spawns;
  		},
-@@ -710,10 +735,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -892,10 +911,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  	};
  
  	get parameters(): TaskToolSchemaInstance {
@@ -207,11 +208,12 @@ index 745ef98c77..3b7f0ffcfc 100644
  			batchEnabled: this.#isBatchEnabled(),
  			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
  			evalToolsEnabled: evalToolsEnabled(this.session),
-@@ -744,11 +767,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -927,12 +944,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  			this.#discoveredAgents;
  		const sessionAgents = this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [];
  		const planMode = this.session.getPlanModeState?.()?.enabled === true;
 -		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
+ 		const perCallModel = perCallModelEnabled(this.session.settings, "task");
  		return renderDescription({
  			agents,
  			sessionAgents,
@@ -220,7 +222,7 @@ index 745ef98c77..3b7f0ffcfc 100644
  			applyIsolatedChanges: cfgTaskIsolationApply.get(this.session.settings),
  			disabledAgents,
  			batchEnabled: this.#isBatchEnabled(),
-@@ -823,6 +845,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -1016,6 +1032,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  		return seanceAgent && isBundledSeance(seanceAgent) ? seanceTaskSchemaFields : undefined;
  	}
  
@@ -233,26 +235,19 @@ index 745ef98c77..3b7f0ffcfc 100644
  	#defaultAgent(): string {
  		return defaultAgentFor(
  			resolveSpawnPolicy(this.session.getSessionSpawns()),
-@@ -967,7 +995,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
- 		// item's agent type against the session's actual default agent.
- 		const defaultAgent = this.#defaultAgent();
- 		const batchEnabled = this.#isBatchEnabled();
--		const plan = planSpawns(rawParams, batchEnabled, defaultAgent, this.#seanceSchemaFields() !== undefined);
-+		const plan = planSpawns(
-+			rawParams,
-+			batchEnabled,
-+			defaultAgent,
-+			this.#seanceSchemaFields() !== undefined,
+@@ -1169,6 +1191,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+ 			defaultAgent,
+ 			this.#seanceSchemaFields() !== undefined,
+ 			this.session.settings,
 +			this.#isIsolationExposed(),
-+		);
+ 		);
  		if (typeof plan === "string") {
  			return createTaskModeError(plan);
- 		}
 diff --git a/packages/coding-agent/src/task/settings.ts b/packages/coding-agent/src/task/settings.ts
-index d19e99af3f..a4d6ac4506 100644
+index 75438b3649..8f3e08bbf3 100644
 --- a/packages/coding-agent/src/task/settings.ts
 +++ b/packages/coding-agent/src/task/settings.ts
-@@ -32,7 +32,8 @@ export const cfgTaskIsolationEnabled = register({
+@@ -33,7 +33,8 @@ export const cfgTaskIsolationEnabled = register({
  		tab: "tasks",
  		group: "Isolation",
  		label: "Allow Isolated Subagents",
@@ -263,28 +258,28 @@ index d19e99af3f..a4d6ac4506 100644
  });
  
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index eece753c46..02c1909197 100644
+index f8966859d3..32922ca6de 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
-@@ -63,7 +63,7 @@ const taskItemSchemaIsolated = type({
- 	"outputSchema?": outputSchemaInputSchema,
+@@ -92,7 +92,7 @@ const taskItemSchemaIsolated = type({
  	"schemaMode?": '"permissive" | "strict"',
  	"tools?": "string[]",
+ 	"model?": "string",
 -	"isolated?": "boolean",
 +	isolated: "boolean",
  	"+": "delete",
  });
  
-@@ -75,7 +75,7 @@ export const taskSchema = type({
- 	"outputSchema?": outputSchemaInputSchema,
+@@ -105,7 +105,7 @@ export const taskSchema = type({
  	"schemaMode?": '"permissive" | "strict"',
  	"tools?": "string[]",
+ 	"model?": "string",
 -	"isolated?": "boolean",
 +	isolated: "boolean",
  	"+": "delete",
  });
  const taskSchemaNoIsolation = type({
-@@ -164,7 +164,7 @@ function createTaskSchema(options: {
+@@ -204,7 +204,7 @@ function createTaskSchema(options: {
  				...schemaFields,
  				...toolsField,
  				...seanceFields,
@@ -293,7 +288,7 @@ index eece753c46..02c1909197 100644
  				"+": "delete",
  			});
  			return guardBatchAgent(
-@@ -204,7 +204,7 @@ function createTaskSchema(options: {
+@@ -244,7 +244,7 @@ function createTaskSchema(options: {
  			...schemaFields,
  			...toolsField,
  			...seanceFields,
@@ -325,10 +320,10 @@ index ca79dd45ba..30cac21825 100644
  			});
  			await manager.getJob("Builder")?.promise;
 diff --git a/packages/coding-agent/test/task/task-batch.test.ts b/packages/coding-agent/test/task/task-batch.test.ts
-index c97b992b49..1aa95b9ca2 100644
+index 38d227f1c1..f8d00dace8 100644
 --- a/packages/coding-agent/test/task/task-batch.test.ts
 +++ b/packages/coding-agent/test/task/task-batch.test.ts
-@@ -177,6 +177,30 @@ describe("task.batch schema gating", () => {
+@@ -178,6 +178,30 @@ describe("task.batch schema gating", () => {
  		expect(itemProperties.apply).toBeUndefined();
  	});
  
@@ -359,10 +354,27 @@ index c97b992b49..1aa95b9ca2 100644
  	it("hides isolation from the dynamic batch schema in plan mode", async () => {
  		mockDiscovery();
  		const tool = await TaskTool.create(
-@@ -388,6 +412,50 @@ describe("task.batch validation", () => {
- 		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
- 		expect(toolResult?.role === "toolResult" && toolResult.isError).toBe(false);
- 	});
+@@ -426,7 +450,15 @@ describe("task.batch validation", () => {
+ 					},
+ 				}),
+ 			);
+-			const item = { name: "Alpha", agent: "task", task: "Do A.", solutionSpace: "c", [field]: "stub/model-b" };
++			// afk: `isolated` is required whenever isolation is exposed.
++			const item = {
++				name: "Alpha",
++				agent: "task",
++				task: "Do A.",
++				solutionSpace: "c",
++				...(isolation ? { isolated: false } : {}),
++				[field]: "stub/model-b",
++			};
+ 			const mock = createMockModel({
+ 				responses: [
+ 					{
+@@ -465,6 +497,50 @@ describe("task.batch validation", () => {
+ 			expect(run).not.toHaveBeenCalled();
+ 		},
+ 	);
 +
 +	it("rejects a model call that omits isolated when isolation is enabled despite lenient validation", async () => {
 +		// afk: lenient validation forwards schema failures to execute(); a
@@ -411,10 +423,10 @@ index c97b992b49..1aa95b9ca2 100644
  
  describe("task.batch spawning", () => {
 diff --git a/packages/coding-agent/test/task/task-schema.test.ts b/packages/coding-agent/test/task/task-schema.test.ts
-index fd6d824e2a..697ea338a9 100644
+index e7e39014b0..936cf6a1c2 100644
 --- a/packages/coding-agent/test/task/task-schema.test.ts
 +++ b/packages/coding-agent/test/task/task-schema.test.ts
-@@ -37,7 +37,7 @@ const bundledSeance = loadBundledAgents().find(agent => agent.name === "seance")
+@@ -48,7 +48,7 @@ const bundledSeance = loadBundledAgents().find(agent => agent.name === "seance")
  
  describe("task schema (single-spawn)", () => {
  	it("requires task", () => {
@@ -423,7 +435,7 @@ index fd6d824e2a..697ea338a9 100644
  		expect(parsed instanceof type.errors).toBe(true);
  	});
  
-@@ -65,6 +65,7 @@ describe("task schema (single-spawn)", () => {
+@@ -107,6 +107,7 @@ describe("task schema (single-spawn)", () => {
  			agent: "scout",
  			task: "Map the auth module.",
  			solutionSpace: "c",
@@ -432,7 +444,7 @@ index fd6d824e2a..697ea338a9 100644
  			schemaMode: "strict",
  			tools: ["word_count"],
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index c6e1d4fccd..68a2c5fdff 100644
+index bb507ed538..36ee75cb09 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
 @@ -7,9 +7,10 @@ import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -446,10 +458,10 @@ index c6e1d4fccd..68a2c5fdff 100644
 +// (batch: `{ context, tasks[] }` of the same items; `isolated` exists — and is
 +// required — only when isolation is enabled). `agent` defaults to the schema's
 +// spawn-policy default, and unknown keys sent by stale callers (`role`,
- // `description`) are stripped by the schema's `+: "delete"` — never rejected.
+ // `description`) are stripped by the schema's `+: "delete"` — never rejected. `model`
+ // is always declared, so a disabled per-call model reaches preflight and is rejected.
  
- describe("oneLineLabel", () => {
-@@ -50,7 +51,13 @@ function parsedItems(parsed: unknown): Array<Record<string, unknown>> {
+@@ -47,7 +48,13 @@ function parsedItems(parsed: unknown): Array<Record<string, unknown>> {
  
  describe("task wire schema", () => {
  	it("accepts the flat { name, agent, task } shape", () => {
@@ -464,7 +476,7 @@ index c6e1d4fccd..68a2c5fdff 100644
  		expect(parsed instanceof type.errors).toBe(false);
  		if (!(parsed instanceof type.errors)) {
  			expect(parsed.name).toBe("AuthLoader");
-@@ -60,18 +67,26 @@ describe("task wire schema", () => {
+@@ -57,18 +64,26 @@ describe("task wire schema", () => {
  	});
  
  	it("defaults a missing agent to 'task'", () => {
@@ -492,7 +504,41 @@ index c6e1d4fccd..68a2c5fdff 100644
  			role: "Rust specialist",
  			description: "stale ui label",
  		});
-@@ -126,14 +141,21 @@ describe("task wire schema", () => {
+@@ -81,7 +96,14 @@ describe("task wire schema", () => {
+ 	});
+ 
+ 	it("keeps a per-call model on the flat shape so preflight decides it", () => {
+-		const parsed = taskSchema({ agent: "task", task: "x", solutionSpace: "c", model: "openai/gpt-5.4:high" });
++		// afk: the flat taskSchema exposes isolation, so `isolated` is required.
++		const parsed = taskSchema({
++			agent: "task",
++			task: "x",
++			solutionSpace: "c",
++			model: "openai/gpt-5.4:high",
++			isolated: false,
++		});
+ 		expect(parsed instanceof type.errors).toBe(false);
+ 		expect(parsed).toHaveProperty("model", "openai/gpt-5.4:high");
+ 	});
+@@ -125,7 +147,16 @@ describe("task wire schema", () => {
+ 		const items = parsedItems(
+ 			batch({
+ 				context: "ctx",
+-				tasks: [{ task: "x", solutionSpace: "c", role: "DB migration specialist", model: "p/m" }],
++				tasks: [
++					{
++						task: "x",
++						solutionSpace: "c",
++						role: "DB migration specialist",
++						model: "p/m",
++						// afk: `isolated` is required whenever isolation is enabled.
++						...(options.isolationEnabled ? { isolated: false } : {}),
++					},
++				],
+ 			}),
+ 		);
+ 		const item = items[0] ?? {};
+@@ -143,14 +174,21 @@ describe("task wire schema", () => {
  			const parsed = schema({
  				context: "Inspect changes",
  				agent: "custom-auditor",

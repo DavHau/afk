@@ -50,10 +50,10 @@ settings-registry-backed reveal); the hand-rolled ctx stub no longer
 satisfies cfg*.get(settings).
 
 diff --git a/packages/coding-agent/src/modes/controllers/event-controller.ts b/packages/coding-agent/src/modes/controllers/event-controller.ts
-index 3f978e59fb..2f0031c694 100644
+index d95743faa4..331f7490ce 100644
 --- a/packages/coding-agent/src/modes/controllers/event-controller.ts
 +++ b/packages/coding-agent/src/modes/controllers/event-controller.ts
-@@ -323,6 +323,13 @@ export class EventController {
+@@ -358,6 +358,13 @@ export class EventController {
  	// once instead of twice.
  	#vocalizedMessageUpdates = new WeakSet<object>();
  	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
@@ -67,7 +67,7 @@ index 3f978e59fb..2f0031c694 100644
  
  	constructor(private ctx: InteractiveModeContext) {
  		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-@@ -1514,6 +1521,22 @@ export class EventController {
+@@ -1676,6 +1683,22 @@ export class EventController {
  			for (let contentIndex = 0; contentIndex < this.ctx.streamingMessage.content.length; contentIndex++) {
  				const content = this.ctx.streamingMessage.content[contentIndex]!;
  				if (content.type !== "toolCall") continue;
@@ -90,7 +90,7 @@ index 3f978e59fb..2f0031c694 100644
  				const tool = this.ctx.viewSession.getToolByName(content.name);
  				const renderToolName = toolRenderName(content.name, tool);
  				if (renderToolName === "read") {
-@@ -1536,6 +1559,7 @@ export class EventController {
+@@ -1698,6 +1721,7 @@ export class EventController {
  							group.updateArgs(content.arguments, content.id);
  							this.ctx.pendingTools.set(content.id, group);
  							this.#toolTimelineComponents.set(content.id, group);
@@ -98,7 +98,7 @@ index 3f978e59fb..2f0031c694 100644
  							this.#settleHeldCompletionIfPresent(content.id, group);
  						}
  						continue;
-@@ -1593,6 +1617,7 @@ export class EventController {
+@@ -1759,6 +1783,7 @@ export class EventController {
  					this.ctx.chatContainer.addChild(component);
  					this.ctx.pendingTools.set(content.id, component);
  					this.#toolTimelineComponents.set(content.id, component);

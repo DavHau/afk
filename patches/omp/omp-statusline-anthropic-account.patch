@@ -58,7 +58,7 @@ email is applied there too, sharing one sanitize/truncate helper
 re-landed unchanged in substance at the moved offsets.
 
 diff --git a/packages/coding-agent/src/modes/status-line-host.ts b/packages/coding-agent/src/modes/status-line-host.ts
-index 208af45823..2ccb812f05 100644
+index 2ab041f34d..23c23839d0 100644
 --- a/packages/coding-agent/src/modes/status-line-host.ts
 +++ b/packages/coding-agent/src/modes/status-line-host.ts
 @@ -55,6 +55,22 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
@@ -302,10 +302,10 @@ index 0000000000..bd68590ebf
 +	});
 +});
 diff --git a/packages/tui/src/status-line/component.ts b/packages/tui/src/status-line/component.ts
-index 3fdc4c9155..7c54b1056a 100644
+index 442b541443..53b5b7e2af 100644
 --- a/packages/tui/src/status-line/component.ts
 +++ b/packages/tui/src/status-line/component.ts
-@@ -813,6 +813,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -852,6 +852,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  	#usageFetchedAt = 0;
  	#usageInFlight = false;
  	#usageStartTimer: Timer | null = null;
@@ -319,7 +319,7 @@ index 3fdc4c9155..7c54b1056a 100644
  	// A timed-out request may still resolve. Its result remains eligible only
  	// until a newer request has applied.
  	#usageRefreshSequence = 0;
-@@ -2057,6 +2064,31 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2163,6 +2170,31 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  		}, STATUS_USAGE_START_DELAY_MS);
  	}
  
@@ -351,7 +351,7 @@ index 3fdc4c9155..7c54b1056a 100644
  	async #runUsageRefresh(session: TSession): Promise<void> {
  		if (this.#disposed || this.session !== session) {
  			this.#usageInFlight = false;
-@@ -2536,6 +2568,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
+@@ -2638,6 +2670,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  
  		// Trigger background fetch (5-min TTL); render uses cached value
  		this.refreshUsageInBackground();
@@ -364,19 +364,19 @@ index 3fdc4c9155..7c54b1056a 100644
  
  		// Get usage statistics
  		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
-@@ -2600,6 +2638,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
- 			focusedAgentId: this.#focusedAgentId,
+@@ -2708,6 +2746,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
  			sessionAccent: sessionAccentEnabled,
  			previewTitle,
+ 			isPinned: this.isSessionPinned(this.session.sessionManager?.getSessionId?.()),
 +			accountEmail,
  			activeRepo: activeRepoCache.activeRepo,
  			width,
  			options: segmentOptions ?? {},
 diff --git a/packages/tui/src/status-line/host.ts b/packages/tui/src/status-line/host.ts
-index 5418734893..44025f7a89 100644
+index e83a724e19..d36092afbd 100644
 --- a/packages/tui/src/status-line/host.ts
 +++ b/packages/tui/src/status-line/host.ts
-@@ -25,6 +25,8 @@ export interface StatusLineSession {
+@@ -71,6 +71,8 @@ export interface StatusLineSession {
  	model?: Model;
  	messages?: readonly AgentMessage[];
  	sessionFile?: string;
@@ -385,7 +385,7 @@ index 5418734893..44025f7a89 100644
  	isStreaming: boolean;
  	isAutoThinking: boolean;
  	contextUsageRevision?: number;
-@@ -95,6 +97,20 @@ export interface StatusLineHost<TSession extends StatusLineSession = StatusLineS
+@@ -146,6 +148,20 @@ export interface StatusLineHost<TSession extends StatusLineSession = StatusLineS
  	getSessionSettingsRevision(session: TSession): number;
  	goalStatusInFooter(session: TSession): boolean;
  	activeAccount(session: TSession, provider: string): StatusAccountIdentity | undefined;
@@ -407,10 +407,10 @@ index 5418734893..44025f7a89 100644
  	fetchUsageReports(session: TSession, signal: AbortSignal): Promise<unknown>;
  	resolveActiveRepo(cwd: string): ActiveRepoContext | null;
 diff --git a/packages/tui/src/status-line/segments.ts b/packages/tui/src/status-line/segments.ts
-index 06b42e18fc..a58a637c5e 100644
+index 189ff999a4..dff56e00ff 100644
 --- a/packages/tui/src/status-line/segments.ts
 +++ b/packages/tui/src/status-line/segments.ts
-@@ -824,17 +824,35 @@ function costSummary(ctx: SegmentContext): string | undefined {
+@@ -825,17 +825,35 @@ function costSummary(ctx: SegmentContext): string | undefined {
  	);
  }
  
@@ -449,12 +449,12 @@ index 06b42e18fc..a58a637c5e 100644
  };
  
 diff --git a/packages/tui/src/status-line/types.ts b/packages/tui/src/status-line/types.ts
-index 47917bfb72..6b6c0b7d50 100644
+index 4f949d8d23..d0a534b792 100644
 --- a/packages/tui/src/status-line/types.ts
 +++ b/packages/tui/src/status-line/types.ts
-@@ -87,6 +87,8 @@ export interface SegmentContext {
- 	/** Stand-in session title for previews; `session_name` renders it when the session is unnamed. */
- 	previewTitle?: string;
+@@ -89,6 +89,8 @@ export interface SegmentContext {
+ 	/** The viewed session is pinned; `session_name` prefixes the pin icon. */
+ 	isPinned?: boolean;
  	activeRepo: ActiveRepoContext | null;
 +	/** Email of the OAuth account this session is attributed to (Anthropic only; undefined until routed). */
 +	accountEmail?: string;
