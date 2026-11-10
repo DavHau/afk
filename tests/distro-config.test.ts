@@ -58,6 +58,10 @@ describe("distribution settings layer", () => {
 		expect(configGet("interruptMode")).toBe("wait");
 	});
 
+	it("sends rows pushed off screen straight to scrollback", () => {
+		expect(configGet("tui.completeScrollback")).toBe("true");
+	});
+
 	it("exposes the afk-skills root as a custom skills directory", () => {
 		const dirs = JSON.parse(configGet("skills.customDirectories")) as string[];
 		expect(dirs.length).toBeGreaterThan(0);

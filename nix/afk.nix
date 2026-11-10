@@ -34,6 +34,10 @@ let
         # afk pins its omp build through nix; upstream's "new version"
         # check can only nag about releases the distro has not adopted.
         checkUpdate: false
+      tui:
+        # Rows a growing HUD/dialog pushes off screen go straight to
+        # scrollback instead of going missing until it shrinks (18.18.0).
+        completeScrollback: true
       modelRoles:
         # Distribution default model. Users override this in their own
         # config.yml, which layers above this.
