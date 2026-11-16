@@ -61,7 +61,21 @@
 # dispatch check runs after the new task/model validation and upstream's new
 # model-refusal and wire-schema tests send `isolated: false`; upstream's new
 # eval-timeout-contract test expects eval's 300 s default; task.md tables
-# were re-aligned; oxfmt-clean re-wraps of patch lines) in patches/omp/.
+# were re-aligned; oxfmt-clean re-wraps of patch lines), then 18.20.3
+# (isolated runs read their changes through a RunChanges tracker — an ovnfs
+# checkout keeps its own start state — so the VCS seam's trackChanges takes
+# the handle, commitToTaskRef forwards commitToBranch's new pre-read `delta`,
+# and the new repo-locked, file-journaling patch apply (applyRootPatch) runs
+# through the handle under vcs.root; upstream's new isolation-merge and
+# ovnfs runner tests pass a GitCheckoutHandle; seance and file-backed task
+# inputs were removed in favour of task.steps, so required-flag's dispatch
+# check lost those parameters and the new empty-model-placeholder test sends
+# `isolated: false`; settings layers merge arrays per layer and the project
+# layer is adopted through the own-layer merge, so the distro layer loads
+# before it; the status-line registry's isUsingOAuth became
+# isUsingSubscription in the account-email tests; task.md, yield.md, eval.md
+# and system-prompt.md were reflowed one item per line and the patch prose
+# re-applied in that style) in patches/omp/.
 #
 # - omp-jj-colocated-task-refs: isolated-task refs live at refs/omp/task/*
 #   (invisible to jj import) — prevents the abandoned-commits incident where

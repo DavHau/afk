@@ -45,10 +45,11 @@ describe("distribution settings layer", () => {
 		expect(configGet("startup.quiet")).toBe("true");
 	});
 
+	// Two cold afk starts (~3 s each) can overrun bun's 5 s default timeout.
 	it("enables subagent isolation pinned to the reflink backend", () => {
 		expect(configGet("task.isolation.enabled")).toBe("true");
 		expect(configGet("isolation.backend")).toBe("reflink");
-	});
+	}, 15_000);
 
 	it("leaves requireCow off so non-CoW hosts degrade to byte copies", () => {
 		expect(configGet("task.isolation.requireCow")).toBe("false");

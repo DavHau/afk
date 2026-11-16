@@ -45,7 +45,7 @@ index ed4dd1fde2..933ab1ff74 100644
  		expect(result.details?.cells?.[0]?.status).toBe("running");
  
 diff --git a/packages/coding-agent/test/tools/eval-timeout-contract.test.ts b/packages/coding-agent/test/tools/eval-timeout-contract.test.ts
-index 5411427b77..b1766cee40 100644
+index 19818d713f..529a1cce2a 100644
 --- a/packages/coding-agent/test/tools/eval-timeout-contract.test.ts
 +++ b/packages/coding-agent/test/tools/eval-timeout-contract.test.ts
 @@ -43,7 +43,8 @@ describe("eval timeout admission contract", () => {

@@ -22,6 +22,12 @@ were re-worded in place against the new text; no other built-in prompt
 newly prescribes state-changing git subcommands (jevify-notice's read-only
 `git show` works unchanged in a colocated repo).
 
+Rebased 18.18.0 -> 18.20.3: upstream reworded system-prompt.md again
+("code your change makes obsolete is in scope"; the critical block now
+says "run git to validate them"); both spots name git/jj again. The new
+ovnfs "Separate checkouts" section only forbids git worktree add/clone,
+so it is left alone.
+
 diff --git a/packages/coding-agent/src/prompts/system/commit-message-system.md b/packages/coding-agent/src/prompts/system/commit-message-system.md
 index be96ec2054..77263c95bf 100644
 --- a/packages/coding-agent/src/prompts/system/commit-message-system.md
@@ -46,7 +52,7 @@ index 42699778bd..c25c3c60f9 100644
  3. Dispatch: launch all parallel `task` subagents in one message; collect every auto-delivered result before advancing.{{#has tools "wait"}} Blocked with nothing else to do? Use `wait`.{{/has}}
  4. Verify: run gates; on failure dispatch fix-ups and re-verify. Never advance on red.
 diff --git a/packages/coding-agent/src/prompts/system/plan-mode-active.md b/packages/coding-agent/src/prompts/system/plan-mode-active.md
-index 88d1899670..159ef0d22a 100644
+index 0e3547cd61..63d67ed0bb 100644
 --- a/packages/coding-agent/src/prompts/system/plan-mode-active.md
 +++ b/packages/coding-agent/src/prompts/system/plan-mode-active.md
 @@ -1,6 +1,6 @@
@@ -58,22 +64,22 @@ index 88d1899670..159ef0d22a 100644
  - Canonical plan: MUST write `local://<slug>-plan.md`.
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index 20cef214f7..7f7f25271e 100644
+index e5b8fff50b..db8c8387cc 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -212,7 +212,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
- 
- # 4. Implement
- - Prefer existing files; review as user.
--{{#has tools "ask"}}- Ask before destructive commands or deleting unrelated code you didn't write; code made obsolete by cutover is in scope.{{else}}- NEVER run destructive git commands or delete unrelated code you didn't write; code made obsolete by cutover is in scope.{{/has}}
-+{{#has tools "ask"}}- Ask before destructive commands or deleting unrelated code you didn't write; code made obsolete by cutover is in scope.{{else}}- NEVER run destructive git/jj commands or delete unrelated code you didn't write; code made obsolete by cutover is in scope.{{/has}}
+@@ -192,7 +192,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
+ - Tool failed or file changed underneath? Re-read first.
+ {{#has tools "todo"}}- Update todos; skip trivial requests.
+ {{/has}}
+-{{#has tools "ask"}}- Ask before destructive commands or deleting unrelated code you didn't write; code your change makes obsolete is in scope.{{else}}- NEVER run destructive git commands or delete unrelated code you didn't write; code your change makes obsolete is in scope.{{/has}}
++{{#has tools "ask"}}- Ask before destructive commands or deleting unrelated code you didn't write; code your change makes obsolete is in scope.{{else}}- NEVER run destructive git/jj commands or delete unrelated code you didn't write; code your change makes obsolete is in scope.{{/has}}
  
  {{#if subagent}}
- # 5. Hand-off
-@@ -272,5 +272,5 @@ Before blocked: ensure info unreachable via tools/context; one failed check ≠
+ # 2. Hand-off
+@@ -233,5 +233,5 @@ Run the narrowest check that exercises the change, once. Investigation: the outp
  <critical>
- - NEVER yield before complete deliverable or while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn.
- - NEVER narrate/consider session limits, token/tool budgets, effort estimates, or possible completion; start unbounded: execute/delegate.
--- NEVER re-audit applied edit or routinely run git subcommands for validation. Tool results are verification.
-+- NEVER re-audit applied edit or routinely run git/jj subcommands for validation. Tool results are verification.
+ - NEVER yield while actionable work remains; a finished phase or todo is not a stop.
+ - NEVER narrate or weigh session limits, token budgets, or effort estimates.
+-- NEVER re-audit applied edits or run git to validate them; tool results are verification.
++- NEVER re-audit applied edits or run git/jj to validate them; tool results are verification.
  </critical>

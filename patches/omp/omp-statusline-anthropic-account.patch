@@ -57,6 +57,10 @@ email is applied there too, sharing one sanitize/truncate helper
 (attributedAccountEmail) with render(). component.ts/host.ts/types.ts
 re-landed unchanged in substance at the moved offsets.
 
+Rebased 18.18.0 -> 18.20.3: the status-line session's
+modelRegistry.isUsingOAuth became isUsingSubscription; both tests' stub
+registries were renamed accordingly. Source hunks only moved.
+
 diff --git a/packages/coding-agent/src/modes/status-line-host.ts b/packages/coding-agent/src/modes/status-line-host.ts
 index 2ab041f34d..23c23839d0 100644
 --- a/packages/coding-agent/src/modes/status-line-host.ts
@@ -86,7 +90,7 @@ index 2ab041f34d..23c23839d0 100644
  	resolveActiveRepo: resolveActiveRepoContextSync,
 diff --git a/packages/coding-agent/test/status-line-auth-warmup.test.ts b/packages/coding-agent/test/status-line-auth-warmup.test.ts
 new file mode 100644
-index 0000000000..fcb5c683d7
+index 0000000000..f40aa9be6a
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-auth-warmup.test.ts
 @@ -0,0 +1,137 @@
@@ -140,7 +144,7 @@ index 0000000000..fcb5c683d7
 +		},
 +		fetchUsageReports: async () => [],
 +		modelRegistry: {
-+			isUsingOAuth: () => oauthStored,
++			isUsingSubscription: () => oauthStored,
 +			authStorage: {
 +				oauth: {
 +					identity: (
@@ -229,7 +233,7 @@ index 0000000000..fcb5c683d7
 +});
 diff --git a/packages/coding-agent/test/status-line-cost-account.test.ts b/packages/coding-agent/test/status-line-cost-account.test.ts
 new file mode 100644
-index 0000000000..bd68590ebf
+index 0000000000..2ddf132c9a
 --- /dev/null
 +++ b/packages/coding-agent/test/status-line-cost-account.test.ts
 @@ -0,0 +1,68 @@
@@ -263,7 +267,7 @@ index 0000000000..bd68590ebf
 +			sessionId: "session-1",
 +			state: { model: args.provider ? { provider: args.provider, id: "test-model" } : undefined },
 +			modelRegistry: {
-+				isUsingOAuth: () => args.oauth ?? false,
++				isUsingSubscription: () => args.oauth ?? false,
 +			},
 +		},
 +	} as unknown as SegmentContext;
@@ -373,7 +377,7 @@ index 442b541443..53b5b7e2af 100644
  			width,
  			options: segmentOptions ?? {},
 diff --git a/packages/tui/src/status-line/host.ts b/packages/tui/src/status-line/host.ts
-index e83a724e19..d36092afbd 100644
+index b1480ff9d0..544ba5d9ee 100644
 --- a/packages/tui/src/status-line/host.ts
 +++ b/packages/tui/src/status-line/host.ts
 @@ -71,6 +71,8 @@ export interface StatusLineSession {
@@ -407,10 +411,10 @@ index e83a724e19..d36092afbd 100644
  	fetchUsageReports(session: TSession, signal: AbortSignal): Promise<unknown>;
  	resolveActiveRepo(cwd: string): ActiveRepoContext | null;
 diff --git a/packages/tui/src/status-line/segments.ts b/packages/tui/src/status-line/segments.ts
-index 189ff999a4..dff56e00ff 100644
+index a168b8af36..ba77cc8ac0 100644
 --- a/packages/tui/src/status-line/segments.ts
 +++ b/packages/tui/src/status-line/segments.ts
-@@ -825,17 +825,35 @@ function costSummary(ctx: SegmentContext): string | undefined {
+@@ -827,17 +827,35 @@ function costSummary(ctx: SegmentContext): string | undefined {
  	);
  }
  

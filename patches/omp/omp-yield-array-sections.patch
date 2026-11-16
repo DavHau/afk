@@ -34,16 +34,18 @@ normalizeSection, so whole-array payloads also get strict-null
 normalization. appendYieldSection splats array payloads when the shape is
 "array". The regression test uses yieldSectionShapes.
 
+Rebased 18.18.0 -> 18.20.3: yield.md went one-sentence-per-line; the
+array-section sentence is its own line after the `type: ["section"]` one.
+
 diff --git a/packages/coding-agent/src/prompts/tools/yield.md b/packages/coding-agent/src/prompts/tools/yield.md
-index 2f5df15048..ec8425b789 100644
+index 896d0485e9..1efdafb651 100644
 --- a/packages/coding-agent/src/prompts/tools/yield.md
 +++ b/packages/coding-agent/src/prompts/tools/yield.md
-@@ -1,7 +1,7 @@
- {{#if workPoolItems}}Submit ONE workpool item at a time as `{ key, data }` or `{ key, error }`: `key` is its 1-based number; `data` is the self-contained outcome/evidence value, `error` is a failure reason. The result tells you which keys remain. The final key ends the turn automatically. NEVER submit multiple items together.
- {{else}}Submit subagent output: `{ data: <your output> }` for success, `{ error: "message" }` for failure. Never both; never a bare payload outside `data`.
+@@ -12,6 +12,7 @@ Never both; never a bare payload outside `data`.
  
--Omit `type` for the usual single terminal structured result. Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates.
-+Omit `type` for the usual single terminal structured result. Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates. For an array-valued section, `data` is one element or an array of elements (an array payload is always read as the whole section's elements).
+ Omit `type` for the usual single terminal structured result.
+ Pass `type: ["section"]` to submit an incremental, non-terminal section that accumulates.
++For an array-valued section, `data` is one element or an array of elements (an array payload is always read as the whole section's elements).
  {{/if}}
  {{#unless workPoolItems}}
  {{#if hasOutputSchema}}
@@ -166,7 +168,7 @@ index 4869a6a011..58dbb03ebd 100644
  		expect(sections?.has("scratchpad")).toBe(false);
  	});
 diff --git a/packages/coding-agent/test/tools/yield.test.ts b/packages/coding-agent/test/tools/yield.test.ts
-index 8bbefbde31..073b9c26d2 100644
+index ad5f72dc9b..af14ace3c3 100644
 --- a/packages/coding-agent/test/tools/yield.test.ts
 +++ b/packages/coding-agent/test/tools/yield.test.ts
 @@ -533,6 +533,55 @@ describe("YieldTool", () => {

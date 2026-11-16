@@ -449,10 +449,10 @@ index edf2aa46ec..f27bbc80bb 100644
  
  /// Tear down a previously started backend at `merged`.
 diff --git a/packages/natives/native/index.d.ts b/packages/natives/native/index.d.ts
-index 39e35ed96a..7b1aebfc60 100644
+index fe27e2c37a..334ed8c922 100644
 --- a/packages/natives/native/index.d.ts
 +++ b/packages/natives/native/index.d.ts
-@@ -2697,9 +2697,20 @@ export interface IsoResolveResult {
+@@ -2809,9 +2809,20 @@ export interface IsoResolveResult {
  
  /**
   * Materialise `merged` as a writable view of `lower` using the requested

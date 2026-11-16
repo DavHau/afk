@@ -52,12 +52,17 @@ openIsolatedWorkspace takes the resolved handle's kind and only opens
 ovnfs for git checkouts — pure jj workspaces always take the native
 snapshot (docs/tools/task.md says so).
 
+Rebased 18.18.0 -> 18.20.3: the runner's baseline capture moved into
+trackChanges(workspace, vcs); prepareIsolationDir still runs on the fresh
+snapshot before it. JjWorkspaceHandle.commitToTaskRef ignores the new
+optional `delta` argument (it re-derives the tree from the isolation copy).
+
 diff --git a/docs/tools/task.md b/docs/tools/task.md
-index 14f8be8dc3..83a2c9649f 100644
+index afea1b7996..7346b34666 100644
 --- a/docs/tools/task.md
 +++ b/docs/tools/task.md
-@@ -165,6 +165,7 @@ Artifacts and side channels:
-   File-backed items wait for dispatch so their bytes are read at dispatch time. Encountering a `taskFile` item stops further speculative launches for that call.
+@@ -158,6 +158,7 @@ Artifacts and side channels:
+ - Speculative launch (`task.speculativeLaunch`, default on; batch mode only) — while a `{ context, tasks[] }` call streams, the tool's stream session (`src/task/speculative-launch.ts`) starts each item's `SpawnRun` as soon as that item's JSON object closes (`context` must already have closed), and starts the remainder when the call finishes streaming. Dispatch adopts runs whose normalized spawn params still match; an invalid finished call, launched items that differ from the finished call, a blocking hook, or an aborted turn aborts every launched run. Launches need host authorization (`authorizeLaunch`): auto-allowed `task` approval and no extension `tool_call`/`tool_result`/approval lifecycle handlers.
  - Isolation is available when `task.isolation.enabled` is true: each task must set `isolated: true` to use a separate checkout; omitted or `false` tasks share the parent checkout. `isolation.backend` selects `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, or `rcopy`, and the PAL resolves the actual backend with fallback; `auto` uses ovnfs for isolated subagents when it is found (below).
  - ovnfs (active whenever the binary is found — `ovnfs.path`, default `ovnfs` on PATH): the system prompt gains a "Separate checkouts" section telling agents to open ovnfs checkouts (`ovnfs new`, `diff`, `apply`, `rm`) instead of `git worktree add`, `git clone` or `cp -r`. When `task.isolation.enabled` also allows isolated tasks and `isolation.backend` is `auto`, each isolated subagent works in an ovnfs checkout — a copy-on-write view of the repo with a private git dir, served by the ovnfs daemon — instead of a native clone. omp runs `ovnfs --json start` to make sure the daemon runs and learn its admin socket, then opens (`new`) and removes (`rm`) one checkout per run over that Unix socket. Capture, merge and apply are the same as for native workspaces. The run's task-isolation dir records the checkout (`.omp-ovnfs-checkout.json`) so `omp worktree clear` removes checkouts of crashed runs; a checkout whose changes could not be captured is kept like a native workspace. Without the binary, isolation stays native; once ovnfs is found there is no fallback: if it fails, the isolated task fails and says so.
 +- Workspace resolution: a git checkout uses the git machinery above; a pure jj workspace (`jj workspace add` secondary, or non-colocated repo) runs capture against jj's backing git store (baseline = the isolation copy's tree on top of the `@` commit, task refs parked as `refs/omp/task/<id>` in the store) and lands merges as a described jj commit — 3-way merged in-store via `git merge-tree`, so a conflict leaves the workspace untouched and the ref parked. The snapshot's `.jj` pointer is removed before the subagent runs, so nothing inside isolation can write through to the shared store. Nested git repos under a jj workspace are not captured. ovnfs checkouts (`isolation.backend: auto`) serve git checkouts only; a pure jj workspace always takes the native snapshot.
@@ -65,22 +70,22 @@ index 14f8be8dc3..83a2c9649f 100644
  - Eval-defined tools: `tools` resolves names across the parent's retained Python/JS kernels. Unknown names, disabled sharing, or the same name defined in both kernels fail preflight; these tools are not available in plan mode.
  - Agent source precedence is first-wins by exact name: project `.omp/agents`; user `.omp/agent/agents`; OMP extension-package `agents/` roots in CLI → project settings → user settings → installed npm/link plugin order; Claude marketplace plugin agents (project before user); then bundled (`scout`, `reviewer`, `security-reviewer`, `task`, `sonic`).
 diff --git a/packages/coding-agent/src/task/isolation-runner.ts b/packages/coding-agent/src/task/isolation-runner.ts
-index 0783615958..07b1f077ed 100644
+index 9591999a74..f1e7b360c4 100644
 --- a/packages/coding-agent/src/task/isolation-runner.ts
 +++ b/packages/coding-agent/src/task/isolation-runner.ts
-@@ -455,6 +455,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
+@@ -531,6 +531,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
  		workspace = await opts.openWorkspace(opts.context.repoRoot, opts.agentId);
  		const isolationDir = workspace.dir;
  		const vcs = opts.context.vcs;
 +		await vcs.prepareIsolationDir?.(isolationDir);
- 		const baseline = await vcs.captureIsolationBaseline(isolationDir);
- 		taskBaseline = baseline;
+ 		const runChanges = await trackChanges(workspace, vcs);
+ 		changes = runChanges;
  		const result = await runSubprocess({
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index 26b674aa43..19b7f4c379 100644
+index 7f143428db..4416353cb3 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -887,9 +887,11 @@ async function loadPlanReference(
+@@ -852,9 +852,11 @@ async function loadPlanReference(
  }
  
  /** Isolated runs work in ovnfs checkouts when `isolation.backend` is auto and ovnfs is found, else in native clones. */
@@ -94,7 +99,7 @@ index 26b674aa43..19b7f4c379 100644
  	return ovnfs ? ovnfsWorkspace(ovnfs) : nativeWorkspace(parseIsolationBackend(backend));
  }
  
-@@ -1082,7 +1084,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
+@@ -1047,7 +1049,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
  				result = await runIsolatedSubprocess({
  					baseOptions,
  					context: isolationContext,
@@ -524,7 +529,7 @@ index 0000000000..81fc01bc04
 +	return new JjWorkspaceHandle(workspace.root(), gitDir);
 +}
 diff --git a/packages/coding-agent/src/task/vcs.ts b/packages/coding-agent/src/task/vcs.ts
-index 40bf9d7669..756f50813c 100644
+index 46f4b01756..00252b63ab 100644
 --- a/packages/coding-agent/src/task/vcs.ts
 +++ b/packages/coding-agent/src/task/vcs.ts
 @@ -14,11 +14,13 @@
@@ -552,7 +557,7 @@ index 40bf9d7669..756f50813c 100644
  	/** Workspace root — the directory the PAL snapshots and merges land in. */
  	readonly root: string;
  
-@@ -99,6 +101,13 @@ export interface VcsHandle {
+@@ -100,6 +102,13 @@ export interface VcsHandle {
  		patches: NestedRepoPatch[],
  		commitMessage?: (diff: string) => Promise<string | null>,
  	): Promise<string[]>;
@@ -566,7 +571,7 @@ index 40bf9d7669..756f50813c 100644
  }
  
  /** Plain git checkout — delegates to the existing worktree/native machinery. */
-@@ -178,11 +187,16 @@ export class GitCheckoutHandle implements VcsHandle {
+@@ -180,11 +189,16 @@ export class GitCheckoutHandle implements VcsHandle {
  /**
   * Resolve the VCS handle for isolated task execution at `cwd`.
   *
@@ -587,10 +592,10 @@ index 40bf9d7669..756f50813c 100644
  	return new GitCheckoutHandle(root);
  }
 diff --git a/packages/coding-agent/src/task/worktree.ts b/packages/coding-agent/src/task/worktree.ts
-index ebe695f330..eae44ca2c7 100644
+index e8aa17104a..fb586578db 100644
 --- a/packages/coding-agent/src/task/worktree.ts
 +++ b/packages/coding-agent/src/task/worktree.ts
-@@ -650,13 +650,17 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
+@@ -629,13 +629,17 @@ async function detachSubmodules(sourceRoot: string, isolationRoot: string): Prom
  	}
  }
  
@@ -611,7 +616,7 @@ index ebe695f330..eae44ca2c7 100644
  	const baseDir = taskIsolationBaseDir(repoRoot, id);
  	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
  	const resolution = await natives.isoResolve(preferred ?? null);
-@@ -681,7 +685,8 @@ export async function ensureIsolation(
+@@ -660,7 +664,8 @@ export async function ensureIsolation(
  			// task's git operations would mutate the parent checkout and stack
  			// parallel task branches. Detaching gives each isolation a private,
  			// frozen repo that still borrows the source object DB via alternates.
@@ -999,7 +1004,7 @@ index 5a7a50fa1f..c724e3a181 100644
 +	});
 +});
 diff --git a/packages/coding-agent/test/task/worktree.test.ts b/packages/coding-agent/test/task/worktree.test.ts
-index 0bc3ef4d37..78998f7d28 100644
+index d481ac5871..377247fc7e 100644
 --- a/packages/coding-agent/test/task/worktree.test.ts
 +++ b/packages/coding-agent/test/task/worktree.test.ts
 @@ -273,6 +273,27 @@ describe("worktree isolation helpers", () => {
